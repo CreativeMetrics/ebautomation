@@ -19,8 +19,12 @@ $conf       = load_config();
 $csrf       = csrf_token();
 $brand_name = $conf['business_name'] ?: 'Automazione Sconti';
 
+$users = load_users();
+
 // ── SETUP MODE ────────────────────────────────────────────────────────────────
-if (empty($conf['dashboard_password'])) {
+// (nessun utente esiste ancora — prima installazione, o installazione
+// legacy senza password che load_users() non è riuscita a migrare)
+if (empty($users)) {
     $setup_error = '';
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'setup' && verify_csrf()) {
         $pwd   = $_POST['new_password'] ?? '';
@@ -28,11 +32,13 @@ if (empty($conf['dashboard_password'])) {
         if ($issue = password_issue($pwd)) {
             $setup_error = $issue;
         } else {
-            $conf['business_name']      = $bname ?: ($conf['business_name'] ?: 'La nostra Azienda');
-            $conf['dashboard_password'] = password_hash($pwd, PASSWORD_DEFAULT);
+            $conf['business_name'] = $bname ?: ($conf['business_name'] ?: 'La nostra Azienda');
             if (empty($conf['webhook_token'])) $conf['webhook_token'] = bin2hex(random_bytes(16));
             save_config($conf);
+            save_users(['admin' => ['password_hash' => password_hash($pwd, PASSWORD_DEFAULT), 'created_at' => time()]]);
             $_SESSION['authenticated'] = true;
+            $_SESSION['username']      = 'admin';
+            audit_log('Setup iniziale completato');
             header('Location: dashboard.php?msg=setup_ok');
             exit;
         }
@@ -42,11 +48,12 @@ if (empty($conf['dashboard_password'])) {
 }
 
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
-if (empty($_SESSION['authenticated'])) {
+if (empty($_SESSION['authenticated']) || empty($_SESSION['username']) || !isset($users[$_SESSION['username']])) {
     $login_error = $login_blocked = false;
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login') {
         // Throttling per IP oltre a quello di sessione: quest'ultimo da solo
         // è aggirabile non inviando il cookie di sessione ad ogni tentativo.
+        $uname        = trim($_POST['username'] ?? '');
         $ip_key       = 'login:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
         $attempts     = (int)($_SESSION['login_attempts']     ?? 0);
         $last_attempt = (int)($_SESSION['login_last_attempt'] ?? 0);
@@ -55,11 +62,13 @@ if (empty($_SESSION['authenticated'])) {
             $login_blocked = $login_error = true;
         } elseif (!verify_csrf()) {
             $login_error = true;
-        } elseif (password_verify($_POST['password'] ?? '', $conf['dashboard_password'])) {
+        } elseif (isset($users[$uname]) && password_verify($_POST['password'] ?? '', $users[$uname]['password_hash'])) {
             unset($_SESSION['login_attempts'], $_SESSION['login_last_attempt']);
             throttle_reset($ip_key);
             $_SESSION['authenticated'] = true;
+            $_SESSION['username']      = $uname;
             session_regenerate_id(true);
+            audit_log('Login effettuato');
             header('Location: dashboard.php');
             exit;
         } else {
@@ -72,15 +81,43 @@ if (empty($_SESSION['authenticated'])) {
     render_login($csrf, $login_error, $brand_name, $login_blocked);
     exit;
 }
+$current_username = $_SESSION['username'];
 
 // ── LOGOUT ────────────────────────────────────────────────────────────────────
-if (isset($_GET['logout'])) { session_destroy(); header('Location: dashboard.php'); exit; }
+if (isset($_GET['logout'])) {
+    if (!empty($_SESSION['authenticated'])) audit_log('Logout');
+    session_destroy();
+    header('Location: dashboard.php');
+    exit;
+}
 
 // ── EXPORT REGOLE ─────────────────────────────────────────────────────────────
 if (($_GET['action'] ?? '') === 'export_regole') {
     header('Content-Type: application/json; charset=utf-8');
     header('Content-Disposition: attachment; filename="regole_sconti_' . date('Y-m-d') . '.json"');
     echo is_readable(REGOLE_FILE) ? file_get_contents(REGOLE_FILE) : '{}';
+    exit;
+}
+
+// ── EXPORT ORDINI CSV ─────────────────────────────────────────────────────────
+if (($_GET['action'] ?? '') === 'export_orders_csv') {
+    $all_proc = file_exists(PROCESSED_FILE) ? (json_decode(file_get_contents(PROCESSED_FILE), true) ?: []) : [];
+    uasort($all_proc, fn($a, $b) => (is_array($b) ? ($b['ts'] ?? 0) : (int)$b) - (is_array($a) ? ($a['ts'] ?? 0) : (int)$a));
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="ordini_processati_' . date('Y-m-d') . '.csv"');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, ['order_id', 'data_ora', 'stato', 'sconti_creati', 'target_ids', 'email_inviata']);
+    foreach ($all_proc as $oid => $v) {
+        $ts       = is_array($v) ? ($v['ts'] ?? 0) : (int)$v;
+        $status   = is_array($v) ? ($v['status'] ?? '') : '';
+        $discounts = is_array($v['discounts'] ?? null) ? $v['discounts'] : [];
+        $legacy_ids = is_array($v['discount_ids'] ?? null) ? $v['discount_ids'] : [];
+        $n_sconti = !empty($discounts) ? count($discounts) : count($legacy_ids);
+        $emailed  = is_array($v['email_sent_targets'] ?? null) && !empty($v['email_sent_targets']);
+        fputcsv($out, [$oid, date('Y-m-d H:i:s', $ts), $status ?: '—', $n_sconti, implode('|', array_keys($discounts)), $emailed ? 'si' : 'no']);
+    }
+    fclose($out);
     exit;
 }
 
@@ -118,14 +155,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'email_intro'     => trim($_POST['email_intro']     ?? $conf['email_intro']),
                 'email_greeting'  => trim($_POST['email_greeting']  ?? $conf['email_greeting']),
                 'email_color'     => $color,
+                'alert_email'     => trim($_POST['alert_email']     ?? $conf['alert_email']),
+                'alert_threshold' => max(1, (int)($_POST['alert_threshold'] ?? $conf['alert_threshold'])),
             ]);
             if ($new_pwd !== '') {
+                // Cambia la password dell'utente attualmente loggato (la gestione
+                // degli altri utenti è nella sezione "Utenti" più sotto).
                 if ($issue = password_issue($new_pwd)) {
                     $_SESSION['flash_error'] = $issue;
                     header('Location: dashboard.php?tab=config');
                     exit;
                 }
-                $updated['dashboard_password'] = password_hash($new_pwd, PASSWORD_DEFAULT);
+                $users[$current_username]['password_hash'] = password_hash($new_pwd, PASSWORD_DEFAULT);
+                save_users($users);
+                audit_log('Password personale cambiata');
             }
             if (isset($_FILES['logo']) && $_FILES['logo']['error'] === UPLOAD_ERR_OK) {
                 $ext      = strtolower(pathinfo($_FILES['logo']['name'], PATHINFO_EXTENSION));
@@ -137,12 +180,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             save_config($updated);
+            audit_log('Configurazione salvata');
             header('Location: dashboard.php?tab=config&msg=ok');
+            exit;
+
+        case 'add_user':
+            $new_uname = trim($_POST['new_username'] ?? '');
+            $new_upwd  = $_POST['new_user_password'] ?? '';
+            if (!preg_match('/^[a-zA-Z0-9_.-]{3,32}$/', $new_uname)) {
+                $_SESSION['flash_error'] = 'Nome utente non valido: usa 3-32 caratteri (lettere, numeri, . _ -).';
+            } elseif (isset($users[$new_uname])) {
+                $_SESSION['flash_error'] = 'Esiste già un utente con questo nome.';
+            } elseif ($issue = password_issue($new_upwd)) {
+                $_SESSION['flash_error'] = $issue;
+            } else {
+                $users[$new_uname] = ['password_hash' => password_hash($new_upwd, PASSWORD_DEFAULT), 'created_at' => time()];
+                save_users($users);
+                audit_log('Utente creato', $new_uname);
+                $_SESSION['flash_ok'] = "Utente \"$new_uname\" creato.";
+            }
+            header('Location: dashboard.php?tab=config');
+            exit;
+
+        case 'delete_user':
+            $del_uname = trim($_POST['username'] ?? '');
+            if (count($users) <= 1) {
+                $_SESSION['flash_error'] = 'Non puoi eliminare l\'unico utente rimasto.';
+            } elseif ($del_uname === $current_username) {
+                $_SESSION['flash_error'] = 'Non puoi eliminare l\'utente con cui hai effettuato l\'accesso.';
+            } elseif (isset($users[$del_uname])) {
+                unset($users[$del_uname]);
+                save_users($users);
+                audit_log('Utente eliminato', $del_uname);
+                $_SESSION['flash_ok'] = "Utente \"$del_uname\" eliminato.";
+            }
+            header('Location: dashboard.php?tab=config');
             exit;
 
         case 'toggle_pause':
             $conf['paused'] = !$conf['paused'];
             save_config($conf);
+            audit_log($conf['paused'] ? 'Automazioni messe in pausa' : 'Automazioni riattivate');
             $_SESSION['flash_ok'] = $conf['paused'] ? 'Automazioni messe in pausa.' : 'Automazioni riattivate.';
             header('Location: dashboard.php?tab=config');
             exit;
@@ -260,6 +338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'regenerate_token':
             $conf['webhook_token'] = bin2hex(random_bytes(16));
             save_config($conf);
+            audit_log('Token webhook rigenerato');
             $_SESSION['flash_ok'] = 'Nuovo token generato. Aggiorna subito l\'URL su Eventbrite.';
             header('Location: dashboard.php?tab=guida');
             exit;
@@ -308,8 +387,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'target_ids'      => $targets,
                     'quantita'        => max(1, (int)($_POST['quantita']        ?? 1)),
                     'giorni_scadenza' => max(0, (int)($_POST['giorni_scadenza'] ?? 0)),
+                    'qty_minima'      => max(1, (int)($_POST['qty_minima']      ?? 1)),
                 ];
                 file_put_contents(REGOLE_FILE, json_encode($regole, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                audit_log('Regola salvata', $tid);
 
                 if (!empty($ev_names)) {
                     $t_name = $ev_names[$tid] ?? $tid;
@@ -330,6 +411,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $regole = load_regole();
                 unset($regole[$tid]);
                 file_put_contents(REGOLE_FILE, json_encode($regole, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                audit_log('Regola eliminata', $tid);
                 header('Location: dashboard.php?tab=sconti&msg=ok');
                 exit;
             }
@@ -348,6 +430,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($valid) {
                         make_regole_backup();
                         file_put_contents(REGOLE_FILE, json_encode($imported, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                        audit_log('Regole importate', count($imported) . ' regole');
                         $_SESSION['flash_ok'] = 'Importate ' . count($imported) . ' regole con successo.';
                     } else {
                         $_SESSION['flash_error'] = 'Struttura JSON non valida. Usa un file esportato da questa dashboard.';
@@ -390,6 +473,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             header('Location: dashboard.php?tab=guida');
             exit;
+
+        case 'retry_failed_orders':
+            $to_retry = load_failed_orders();
+            if (empty($to_retry)) {
+                $_SESSION['flash_ok'] = 'Nessun ordine in coda da ritentare.';
+                header('Location: dashboard.php?tab=log');
+                exit;
+            }
+            $rf_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+            $rf_base   = $rf_scheme . '://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['REQUEST_URI']), '/') . '/';
+            $rf_url    = $rf_base . 'eventbrite-webhook.php' . ($conf['webhook_token'] ? '?token=' . $conf['webhook_token'] : '');
+            $rf_ok = 0; $rf_ko = 0;
+            foreach ($to_retry as $rf_order_id => $rf_entry) {
+                $ch = curl_init($rf_url);
+                curl_setopt_array($ch, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_POSTFIELDS     => json_encode([
+                        'api_url' => $rf_entry['api_url'] ?? '',
+                        'config'  => ['action' => 'order.placed'],
+                    ]),
+                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT        => 30,
+                ]);
+                curl_exec($ch);
+                $rf_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+                if ($rf_status === 200) $rf_ok++; else $rf_ko++;
+            }
+            // Chi è tornato "complete" si è già auto-rimosso dalla coda dentro al webhook;
+            // ricontiamo cosa resta per un messaggio accurato.
+            $still_pending = count(load_failed_orders());
+            audit_log('Riprova ordini falliti', count($to_retry) . ' tentati, ' . $still_pending . ' ancora in coda');
+            $_SESSION['flash_ok'] = "Ritentati " . count($to_retry) . " ordini. Ancora in coda: $still_pending.";
+            header('Location: dashboard.php?tab=log');
+            exit;
     }
 }
 
@@ -404,13 +523,29 @@ $organizations = [];
 if (!empty($conf['api_token']) && in_array($active_tab, ['sconti','guida'])) {
     $ch = curl_init();
     curl_setopt_array($ch, [CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $conf['api_token']], CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5]);
-    if ($active_tab === 'guida') {
-        curl_setopt($ch, CURLOPT_URL, 'https://www.eventbriteapi.com/v3/users/me/organizations/');
-        $organizations = json_decode(curl_exec($ch), true)['organizations'] ?? [];
-    }
-    if ($active_tab === 'sconti' && !empty($conf['org_id'])) {
-        curl_setopt($ch, CURLOPT_URL, 'https://www.eventbriteapi.com/v3/organizations/' . $conf['org_id'] . '/events/?status=all');
-        $events = json_decode(curl_exec($ch), true)['events'] ?? [];
+    curl_setopt($ch, CURLOPT_URL, 'https://www.eventbriteapi.com/v3/users/me/organizations/');
+    $organizations = json_decode(curl_exec($ch), true)['organizations'] ?? [];
+
+    if ($active_tab === 'sconti') {
+        // Multi-organizzazione: un unico token può avere accesso a più org
+        // Eventbrite (elenco sopra); mostriamo gli eventi di TUTTE quelle
+        // accessibili, non solo dell'org_id impostato in configurazione, così
+        // le regole possono referenziare eventi trigger/target di qualunque
+        // organizzazione gestita dallo stesso account (il webhook risolve poi
+        // l'org corretta per ogni evento target dinamicamente, vedi
+        // resolve_event_org_id in functions.php). Limitato a 8 org per non
+        // allungare troppo il caricamento della pagina.
+        $org_list = !empty($organizations) ? array_slice($organizations, 0, 8)
+            : (!empty($conf['org_id']) ? [['id' => $conf['org_id'], 'name' => $conf['org_id']]] : []);
+        foreach ($org_list as $org) {
+            if (empty($org['id'])) continue;
+            curl_setopt($ch, CURLOPT_URL, 'https://www.eventbriteapi.com/v3/organizations/' . $org['id'] . '/events/?status=all');
+            $org_events = json_decode(curl_exec($ch), true)['events'] ?? [];
+            foreach ($org_events as $ev) {
+                $ev['_org_name'] = $org['name'] ?? $org['id'];
+                $events[] = $ev;
+            }
+        }
     }
     curl_close($ch);
 }
@@ -521,7 +656,7 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
     <div class="card">
         <h2>Automazioni Attive <a href="?action=export_regole" class="btn btn-secondary" style="float:right;font-size:12px;padding:8px 14px;">⬇ Esporta JSON</a></h2>
         <table>
-            <thead><tr><th>Trigger</th><th>Descrizione</th><th>Sconto</th><th>Qtà</th><th>Scade</th><th>Target</th><th></th></tr></thead>
+            <thead><tr><th>Trigger</th><th>Descrizione</th><th>Sconto</th><th>Qtà</th><th>Min. trigger</th><th>Scade</th><th>Target</th><th></th></tr></thead>
             <tbody>
             <?php foreach ($regole as $tid => $r):
                 $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
@@ -532,6 +667,7 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                 <td><strong><?= h($r['descrizione']) ?></strong></td>
                 <td><?= $sconto_label ?></td>
                 <td><?= h((string)($r['quantita'] ?? 1)) ?></td>
+                <td><?= ($r['qty_minima'] ?? 1) > 1 ? h((string)$r['qty_minima']) . ' biglietti' : '—' ?></td>
                 <td><?= ($r['giorni_scadenza'] ?? 0) > 0 ? h((string)$r['giorni_scadenza']) . ' gg' : '—' ?></td>
                 <td><?php foreach ($r['target_ids'] as $t) echo '<span class="badge">'.h($t).'</span> '; ?></td>
                 <td style="white-space:nowrap;">
@@ -545,7 +681,7 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                 </td>
             </tr>
             <?php endforeach; ?>
-            <?php if (empty($regole)): ?><tr><td colspan="7" style="color:#94a3b8;text-align:center;padding:30px;">Nessuna regola. Creane una qui sotto.</td></tr><?php endif; ?>
+            <?php if (empty($regole)): ?><tr><td colspan="8" style="color:#94a3b8;text-align:center;padding:30px;">Nessuna regola. Creane una qui sotto.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
@@ -600,7 +736,14 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                     <label>Scadenza (giorni, 0 = mai)</label>
                     <input type="number" name="giorni_scadenza" value="<?= h((string)($edit_rule['giorni_scadenza'] ?? 0)) ?>" min="0" max="3650">
                 </div>
-                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
+                <div class="input-group">
+                    <label>Quantità minima trigger</label>
+                    <input type="number" name="qty_minima" value="<?= h((string)($edit_rule['qty_minima'] ?? 1)) ?>" min="1" max="9999">
+                    <span class="tip">Biglietti dell'evento trigger richiesti nello stesso ordine perché la regola si attivi. 1 = sempre (default).</span>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;grid-column:1/-1;">
                     <div>
                         <button type="submit"><?= $edit_rule ? 'Aggiorna' : 'Crea Regola' ?></button>
                         <?php if ($edit_rule): ?><a href="?tab=sconti" class="btn btn-secondary" style="margin-left:8px;">Annulla</a><?php endif; ?>
@@ -617,12 +760,14 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
         <?php elseif (empty($events)): ?>
             <p style="color:#94a3b8;">Nessun evento trovato. Verifica l'Organization ID.</p>
         <?php else: ?>
+        <p class="tip" style="margin-top:-14px;margin-bottom:16px;">Eventi di tutte le organizzazioni accessibili al tuo token — trigger e target possono appartenere a organizzazioni diverse.</p>
         <table>
-            <thead><tr><th>Evento</th><th>Status</th><th>ID</th></tr></thead>
+            <thead><tr><th>Evento</th><th>Organizzazione</th><th>Status</th><th>ID</th></tr></thead>
             <tbody>
             <?php foreach ($events as $e): ?>
             <tr>
                 <td><strong><?= h($e['name']['text'] ?? '') ?></strong></td>
+                <td style="color:#64748b;"><?= h((string)($e['_org_name'] ?? '')) ?></td>
                 <td><?= h($e['status'] ?? '') ?></td>
                 <td><span class="badge" onclick="cp('<?= h($e['id']) ?>')" title="Clicca per copiare negli input"><?= h($e['id']) ?></span></td>
             </tr>
@@ -713,7 +858,21 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                 <span class="tip" style="margin-left:12px;">Mostra come appare l'email al cliente con i valori attuali del form.</span>
             </div>
 
-            <h3>Sicurezza Dashboard</h3>
+            <h3>Notifiche Admin</h3>
+            <div class="grid">
+                <div class="input-group">
+                    <label>Email di alert</label>
+                    <input type="email" name="alert_email" value="<?= h($conf['alert_email']) ?>" placeholder="<?= h($conf['smtp_user'] ?: 'usa Email Mittente') ?>">
+                    <span class="tip">Se vuota, gli alert vanno all'Email Mittente SMTP.</span>
+                </div>
+                <div class="input-group">
+                    <label>Soglia errori/giorno</label>
+                    <input type="number" name="alert_threshold" value="<?= h((string)$conf['alert_threshold']) ?>" min="1" max="999">
+                    <span class="tip">Sopra questa soglia parte un'email di alert (max 1/ora).</span>
+                </div>
+            </div>
+
+            <h3>La tua password (<?= h($current_username) ?>)</h3>
             <div class="grid">
                 <div class="input-group">
                     <label>Nuova Password (lascia vuoto per non cambiare)</label>
@@ -721,6 +880,50 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                 </div>
             </div>
             <button type="submit">Salva Configurazione</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>👥 Utenti Dashboard</h2>
+        <p style="color:#64748b;font-size:14px;margin-top:0;">Ogni utente ha le proprie credenziali; le azioni compiute vengono registrate nel log di audit (tab Log) con nome utente e IP.</p>
+        <table>
+            <thead><tr><th>Utente</th><th>Creato il</th><th></th></tr></thead>
+            <tbody>
+            <?php foreach ($users as $uname => $u): ?>
+                <tr>
+                    <td><strong><?= h($uname) ?></strong><?= $uname === $current_username ? ' <span class="badge" style="cursor:default;">tu</span>' : '' ?></td>
+                    <td style="color:#64748b;"><?= !empty($u['created_at']) ? date('d/m/Y H:i', $u['created_at']) : '—' ?></td>
+                    <td>
+                        <?php if ($uname !== $current_username && count($users) > 1): ?>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare l\'utente <?= h(addslashes($uname)) ?>?')">
+                            <input type="hidden" name="action"   value="delete_user">
+                            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+                            <input type="hidden" name="username"  value="<?= h($uname) ?>">
+                            <button type="submit" class="del-btn">&times;</button>
+                        </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <h3>Nuovo Utente</h3>
+        <form method="POST">
+            <input type="hidden" name="action"     value="add_user">
+            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+            <div class="grid">
+                <div class="input-group">
+                    <label>Nome utente</label>
+                    <input type="text" name="new_username" placeholder="es. marco" pattern="[a-zA-Z0-9_.\-]{3,32}" required>
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" name="new_user_password" placeholder="Minimo 10 caratteri" autocomplete="new-password" required>
+                </div>
+                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
+                    <button type="submit" class="btn-secondary">+ Crea Utente</button>
+                </div>
+            </div>
         </form>
     </div>
 
@@ -757,13 +960,26 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
 
     $log_lines = [];
     $stats = ['sconti' => 0, 'email' => 0, 'errori' => 0];
+    $daily_stats = []; // 'YYYY-MM-DD' => ['sconti'=>,'email'=>,'errori'=>]
     if (file_exists($log_target) && is_readable($log_target)) {
         $all_lines = file($log_target, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         foreach ($all_lines as $line) {
-            if (stripos($line, 'Sconto creato') !== false)     $stats['sconti']++;
-            elseif (stripos($line, 'Email inviata') !== false) $stats['email']++;
-            elseif (stripos($line, 'ERRORE') !== false)        $stats['errori']++;
+            $day = null;
+            if (preg_match('/^\[(\d{4}-\d{2}-\d{2})/', $line, $m)) $day = $m[1];
+            if ($day !== null && !isset($daily_stats[$day])) $daily_stats[$day] = ['sconti' => 0, 'email' => 0, 'errori' => 0];
+
+            if (stripos($line, 'Sconto creato') !== false) {
+                $stats['sconti']++;
+                if ($day !== null) $daily_stats[$day]['sconti']++;
+            } elseif (stripos($line, 'Email inviata') !== false) {
+                $stats['email']++;
+                if ($day !== null) $daily_stats[$day]['email']++;
+            } elseif (stripos($line, 'ERRORE') !== false) {
+                $stats['errori']++;
+                if ($day !== null) $daily_stats[$day]['errori']++;
+            }
         }
+        krsort($daily_stats); // più recente in cima
         $log_lines = array_reverse(array_slice($all_lines, -500));
     }
 
@@ -799,6 +1015,25 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
         <div class="stat-card err"><div class="stat-val"><?= $stats['errori'] ?></div><div class="stat-lbl">Errori</div></div>
     </div>
 
+    <?php if (!empty($daily_stats)): ?>
+    <div class="card">
+        <h2>📊 Statistiche giornaliere <?= h($log_period_label) ?></h2>
+        <table>
+            <thead><tr><th>Giorno</th><th>Sconti Creati</th><th>Email Inviate</th><th>Errori</th></tr></thead>
+            <tbody>
+            <?php foreach ($daily_stats as $day => $ds): ?>
+                <tr>
+                    <td><?= h(DateTimeImmutable::createFromFormat('Y-m-d', $day)?->format('d/m/Y') ?? $day) ?></td>
+                    <td><?= $ds['sconti'] ?></td>
+                    <td><?= $ds['email'] ?></td>
+                    <td style="<?= $ds['errori'] > 0 ? 'color:#ef4444;font-weight:700;' : '' ?>"><?= $ds['errori'] ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
+
     <div class="card">
         <h2>📋 Log <?= h($log_period_label) ?> <span style="font-size:13px;font-weight:400;color:#94a3b8;">(ultimi 500, più recenti in cima)</span></h2>
         <?php if (empty($log_lines)): ?>
@@ -821,25 +1056,71 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
         uasort($all_proc, fn($a, $b) => (is_array($b) ? $b['ts'] : (int)$b) - (is_array($a) ? $a['ts'] : (int)$a));
         $recent_orders = array_slice($all_proc, 0, 25, true);
     }
+    $failed_orders = load_failed_orders();
     ?>
-    <?php if (!empty($recent_orders)): ?>
-    <div class="card">
-        <h2>📦 Ordini Processati di Recente</h2>
+    <?php if (!empty($failed_orders)): ?>
+    <div class="card" style="border-top:4px solid #ef4444;">
+        <h2>⚠️ Ordini in coda da ritentare (<?= count($failed_orders) ?>)</h2>
+        <p style="color:#64748b;font-size:14px;margin-top:0;">Ordini per cui almeno uno sconto o l'invio email non sono ancora andati a buon fine dopo i tentativi automatici. Il ritentativo riprende solo la parte mancante: non ricrea sconti già ottenuti né duplica email già inviate.</p>
         <table>
-            <thead><tr><th>Order ID</th><th>Data / Ora</th><th>Sconti tracciati</th></tr></thead>
+            <thead><tr><th>Order ID</th><th>Da quando</th><th>Motivo</th></tr></thead>
             <tbody>
-            <?php foreach ($recent_orders as $oid => $v):
-                $ts   = is_array($v) ? ($v['ts'] ?? 0) : (int)$v;
-                $ids  = is_array($v) ? count($v['discount_ids'] ?? []) : '—';
-            ?>
+            <?php foreach ($failed_orders as $foid => $fv): ?>
                 <tr>
-                    <td><span class="badge"><?= h($oid) ?></span></td>
-                    <td style="color:#64748b;"><?= date('d/m/Y H:i:s', $ts) ?></td>
-                    <td style="color:#64748b;"><?= $ids ?></td>
+                    <td><span class="badge"><?= h($foid) ?></span></td>
+                    <td style="color:#64748b;"><?= date('d/m/Y H:i:s', $fv['ts'] ?? 0) ?></td>
+                    <td style="color:#991b1b;"><?= h($fv['reason'] ?? '') ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
         </table>
+        <form method="POST" style="margin-top:16px;">
+            <input type="hidden" name="action"     value="retry_failed_orders">
+            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+            <button type="submit" class="btn-warning">🔄 Riprova ordini falliti</button>
+        </form>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($recent_orders)): ?>
+    <div class="card">
+        <h2>📦 Ordini Processati di Recente <a href="?action=export_orders_csv" class="btn btn-secondary" style="float:right;font-size:12px;padding:8px 14px;">⬇ Esporta CSV</a></h2>
+        <table>
+            <thead><tr><th>Order ID</th><th>Data / Ora</th><th>Stato</th><th>Sconti tracciati</th></tr></thead>
+            <tbody>
+            <?php foreach ($recent_orders as $oid => $v):
+                $ts     = is_array($v) ? ($v['ts'] ?? 0) : (int)$v;
+                $status = is_array($v) ? ($v['status'] ?? '') : '';
+                if (is_array($v) && isset($v['discounts'])) {
+                    $count = count($v['discounts']);
+                } elseif (is_array($v) && isset($v['discount_ids'])) {
+                    $count = count($v['discount_ids']); // formato precedente
+                } else {
+                    $count = '—';
+                }
+            ?>
+                <tr>
+                    <td><span class="badge"><?= h($oid) ?></span></td>
+                    <td style="color:#64748b;"><?= date('d/m/Y H:i:s', $ts) ?></td>
+                    <td><?= $status === 'partial' ? '<span style="color:#f59e0b;font-weight:700;">⚠ parziale</span>' : ($status === 'complete' ? '<span style="color:#10b981;">✓ completo</span>' : '—') ?></td>
+                    <td style="color:#64748b;"><?= $count ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
+
+    <?php
+    $audit_lines = [];
+    if (file_exists(AUDIT_LOG_FILE) && is_readable(AUDIT_LOG_FILE)) {
+        $audit_lines = array_reverse(array_slice(file(AUDIT_LOG_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES), -200));
+    }
+    ?>
+    <?php if (!empty($audit_lines)): ?>
+    <div class="card">
+        <h2>🕵️ Audit Log <span style="font-size:13px;font-weight:400;color:#94a3b8;">(ultime 200 azioni, chi ha fatto cosa)</span></h2>
+        <div class="log-box"><?php foreach ($audit_lines as $line) echo h($line) . "\n"; ?></div>
     </div>
     <?php endif; ?>
 
@@ -914,14 +1195,28 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
         </form>
 
         <?php
-        $backup_dir = __DIR__ . '/backups';
-        $backups    = is_dir($backup_dir) ? (glob($backup_dir . '/regole_*.json') ?: []) : [];
-        rsort($backups);
+        $backup_dir     = __DIR__ . '/backups';
+        $regole_backups = is_dir($backup_dir) ? (glob($backup_dir . '/regole_*.json') ?: []) : [];
+        $config_backups = is_dir($backup_dir) ? (glob($backup_dir . '/config_*.json') ?: []) : [];
+        rsort($regole_backups);
+        rsort($config_backups);
         ?>
-        <?php if (!empty($backups)): ?>
-        <h3>Backup Automatici</h3>
+        <?php if (!empty($regole_backups)): ?>
+        <h3>Backup Regole Sconti</h3>
         <ul style="list-style:none;padding:0;margin:0;">
-            <?php foreach (array_slice($backups, 0, 10) as $bk): ?>
+            <?php foreach (array_slice($regole_backups, 0, 10) as $bk): ?>
+                <li style="font-size:13px;padding:6px 0;border-bottom:1px solid #f1f5f9;color:#475569;">
+                    📄 <?= h(basename($bk)) ?>
+                    <span style="color:#94a3b8;margin-left:8px;"><?= date('d/m/Y H:i', filemtime($bk)) ?></span>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+        <?php endif; ?>
+        <?php if (!empty($config_backups)): ?>
+        <h3>Backup Configurazione</h3>
+        <p class="tip" style="margin-top:-8px;margin-bottom:10px;">Creato automaticamente ad ogni salvataggio della configurazione (contiene i segreti cifrati).</p>
+        <ul style="list-style:none;padding:0;margin:0;">
+            <?php foreach (array_slice($config_backups, 0, 10) as $bk): ?>
                 <li style="font-size:13px;padding:6px 0;border-bottom:1px solid #f1f5f9;color:#475569;">
                     📄 <?= h(basename($bk)) ?>
                     <span style="color:#94a3b8;margin-left:8px;"><?= date('d/m/Y H:i', filemtime($bk)) ?></span>
@@ -1233,7 +1528,8 @@ function render_login(string $csrf, bool $error, string $brand, bool $blocked = 
     <form method="POST">
         <input type="hidden" name="action" value="login">
         <input type="hidden" name="csrf_token" value="{$csrf}">
-        <label>Password</label><input type="password" name="password" autofocus required>
+        <label>Utente</label><input type="text" name="username" value="admin" autofocus required autocomplete="username">
+        <label>Password</label><input type="password" name="password" required autocomplete="current-password">
         <button type="submit">Accedi</button>
     </form></div></body></html>
 HTML;

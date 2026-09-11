@@ -374,9 +374,10 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
         <div class="section">
             <div class="section-title"><span>🔒</span> Sicurezza e Manutenzione</div>
             <div class="info-grid">
-                <div class="info-item <?= !empty($conf['dashboard_password']) ? 'status-ok' : 'status-err' ?>">
-                    <div class="lbl">Password Dashboard</div>
-                    <div class="val"><?= !empty($conf['dashboard_password']) ? '●●●●●●●● (impostata)' : '— Non impostata —' ?></div>
+                <?php $riep_users = load_users(); ?>
+                <div class="info-item <?= !empty($riep_users) ? 'status-ok' : 'status-err' ?>">
+                    <div class="lbl">Utenti Dashboard</div>
+                    <div class="val"><?= !empty($riep_users) ? count($riep_users) . ' utente/i configurato/i' : '— Nessun utente —' ?></div>
                 </div>
                 <div class="info-item">
                     <div class="lbl">Sessione</div>

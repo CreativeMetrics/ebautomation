@@ -10,6 +10,10 @@ webhook_log_*.txt
 processed_orders.json
 regole_sconti.json
 login_throttle.json
+failed_orders.json
+alert_state.json
+users.json
+audit_log.txt
 trigger_events.txt
 target_events.txt
 backups/

@@ -37,6 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Troppi tentativi falliti. Riprova tra 15 minuti.';
     } else {
         $api_token = trim($_POST['api_token']        ?? '');
+        $username  = trim($_POST['username']         ?? '') ?: 'admin';
         $new_pwd   = trim($_POST['new_password']     ?? '');
         $confirm   = trim($_POST['confirm_password'] ?? '');
 
@@ -45,15 +46,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['rp_last_attempt'] = time();
             throttle_hit($ip_key, 900);
             $error = 'Private Token API non corretto. Trovi il token nel pannello Eventbrite → API Keys.';
+        } elseif (!preg_match('/^[a-zA-Z0-9_.-]{3,32}$/', $username)) {
+            $error = 'Nome utente non valido.';
         } elseif ($issue = password_issue($new_pwd)) {
             $error = $issue;
         } elseif ($new_pwd !== $confirm) {
             $error = 'Le password non coincidono.';
         } else {
-            $conf['dashboard_password'] = password_hash($new_pwd, PASSWORD_DEFAULT);
-            save_config($conf);
+            // Il token API verificato sopra è la prova d'identità: possiamo
+            // reimpostare la password di un utente esistente, o crearlo se
+            // non esiste ancora (utile se non si ricorda più quali utenti
+            // sono stati configurati).
+            $users = load_users();
+            $was_existing = isset($users[$username]);
+            $users[$username] = [
+                'password_hash' => password_hash($new_pwd, PASSWORD_DEFAULT),
+                'created_at'    => $users[$username]['created_at'] ?? time(),
+            ];
+            save_users($users);
             unset($_SESSION['rp_attempts'], $_SESSION['rp_last_attempt']);
             throttle_reset($ip_key);
+            $_SESSION['username'] = $username; // per l'audit_log qui sotto
+            audit_log($was_existing ? 'Password reimpostata via token API' : 'Utente creato via reset password (token API)', $username);
+            unset($_SESSION['username']); // non autentica automaticamente: bisogna comunque fare login
             $success = true;
         }
     }
@@ -107,6 +122,9 @@ $brand = htmlspecialchars($conf['business_name'] ?: 'Dashboard', ENT_QUOTES, 'UT
         <form method="POST" autocomplete="off">
             <label>Private Token API Eventbrite</label>
             <input type="password" name="api_token" placeholder="Incolla il token" required autocomplete="new-password">
+
+            <label>Nome utente</label>
+            <input type="text" name="username" value="admin" placeholder="admin" required>
 
             <label>Nuova Password Dashboard</label>
             <input type="password" name="new_password" placeholder="Minimo 10 caratteri" required autocomplete="new-password">
