@@ -60,30 +60,10 @@ if ($order_id === '') {
     exit;
 }
 
-// 3. Carica processed_orders.json (compatibile con vecchio formato int/flat
-// array e nuovo formato con stato/mappa sconti per target)
-$processed_file = PROCESSED_FILE;
-$processed      = [];
-
-if (file_exists($processed_file)) {
-    $processed = json_decode(file_get_contents($processed_file), true) ?: [];
-    $cutoff    = time() - 30 * 86400;
-    $processed = array_filter($processed, function ($v) use ($cutoff) {
-        return (is_array($v) ? ($v['ts'] ?? 0) : (int)$v) > $cutoff;
-    });
-}
-
 // ── RIMBORSO ─────────────────────────────────────────────────────────────────
 if ($action === 'order.refunded') {
-    $entry    = $processed[$order_id] ?? null;
-    $disc_ids = [];
-    if (is_array($entry)) {
-        if (isset($entry['discounts']) && is_array($entry['discounts'])) {
-            $disc_ids = array_values($entry['discounts']);           // formato attuale: target_id => discount_id
-        } elseif (isset($entry['discount_ids']) && is_array($entry['discount_ids'])) {
-            $disc_ids = $entry['discount_ids'];                      // formato precedente: array piatto
-        }
-    }
+    $entry    = get_processed_order($order_id);
+    $disc_ids = $entry ? array_values($entry['discounts']) : [];
 
     if (empty($disc_ids)) {
         write_log("Rimborso ordine $order_id: nessun codice sconto tracciato, niente da eliminare.");
@@ -110,42 +90,21 @@ if ($action === 'order.refunded') {
 // ── ACQUISTO ─────────────────────────────────────────────────────────────────
 if ($action !== 'order.placed') exit; // ignora altri tipi di evento
 
-// Verifica e (ri)apre una sezione di lavoro atomica (flock) per l'ordine.
-// Un ordine già COMPLETO (tutti gli sconti creati ed email inviata con
-// successo) viene saltato — è la vera idempotenza. Un ordine ancora
-// "partial" (fallito parzialmente in un tentativo precedente, o in corso
-// da un'altra consegna concorrente dello stesso webhook) viene ripreso da
-// dove era rimasto: questo stesso meccanismo è anche ciò che permette alla
-// dashboard di "ritentare" un ordine fallito semplicemente re-inviando lo
-// stesso payload al webhook (vedi retry-failed.php).
-$already_complete = false;
-$existing_discounts = [];
-$existing_emailed   = [];
-$cutoff = time() - 30 * 86400;
-atomic_json_update($processed_file, function (array $data) use ($order_id, $cutoff, &$already_complete, &$existing_discounts, &$existing_emailed) {
-    $data = array_filter($data, function ($v) use ($cutoff) {
-        return (is_array($v) ? ($v['ts'] ?? 0) : (int)$v) > $cutoff;
-    });
-    $existing = $data[$order_id] ?? null;
-    if (is_array($existing) && ($existing['status'] ?? '') === 'complete') {
-        $already_complete = true;
-        return $data;
-    }
-    $existing_discounts = is_array($existing['discounts'] ?? null) ? $existing['discounts'] : [];
-    $existing_emailed   = is_array($existing['email_sent_targets'] ?? null) ? $existing['email_sent_targets'] : [];
-    $data[$order_id] = [
-        'ts'                  => time(),
-        'status'              => 'partial',
-        'discounts'           => $existing_discounts,
-        'email_sent_targets'  => $existing_emailed,
-    ];
-    return $data;
-});
-
-if ($already_complete) {
+// Verifica e (ri)apre una sezione di lavoro atomica per l'ordine (transazione
+// SQLite BEGIN IMMEDIATE, vedi claim_processed_order). Un ordine già COMPLETO
+// (tutti gli sconti creati ed email inviata con successo) viene saltato — è
+// la vera idempotenza. Un ordine ancora "partial" (fallito parzialmente in un
+// tentativo precedente, o in corso da un'altra consegna concorrente dello
+// stesso webhook) viene ripreso da dove era rimasto: questo stesso meccanismo
+// è anche ciò che permette alla dashboard di "ritentare" un ordine fallito
+// semplicemente re-inviando lo stesso payload al webhook.
+$claim = claim_processed_order($order_id);
+if ($claim['already_complete']) {
     write_log("Ordine $order_id già completato. Skip.");
     exit;
 }
+$existing_discounts = $claim['discounts'];
+$existing_emailed   = $claim['email_sent_targets'];
 
 if (!isset($order['attendees'])) {
     write_log("Ordine $order_id senza attendees. HTTP: $http_code");
@@ -337,15 +296,7 @@ if (!empty($regali_finali) && !empty($targets_to_email)) {
 
 // 6. Persisti lo stato finale dell'ordine
 $is_complete = $discounts_complete && $email_ok;
-atomic_json_update($processed_file, function (array $data) use ($order_id, $discounts, $email_sent_targets, $is_complete) {
-    $data[$order_id] = [
-        'ts'                 => time(),
-        'status'             => $is_complete ? 'complete' : 'partial',
-        'discounts'          => $discounts,
-        'email_sent_targets' => $email_sent_targets,
-    ];
-    return $data;
-});
+finalize_processed_order($order_id, $discounts, $email_sent_targets, $is_complete);
 
 if ($is_complete) {
     unqueue_failed_order($order_id);

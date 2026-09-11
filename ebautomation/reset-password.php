@@ -22,7 +22,7 @@ $success = false;
 
 // Se la config non ha api_token, il reset non è possibile via questo script
 if (empty($conf['api_token'])) {
-    die('<p style="font-family:sans-serif;padding:40px;">Impossibile procedere: nessun token API configurato. Modifica <code>config.json</code> direttamente via FTP/SSH.</p>');
+    die('<p style="font-family:sans-serif;padding:40px;">Impossibile procedere: nessun token API configurato. Modifica il database direttamente via FTP/SSH oppure completa prima la configurazione dalla dashboard.</p>');
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -57,13 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // reimpostare la password di un utente esistente, o crearlo se
             // non esiste ancora (utile se non si ricorda più quali utenti
             // sono stati configurati).
-            $users = load_users();
-            $was_existing = isset($users[$username]);
-            $users[$username] = [
-                'password_hash' => password_hash($new_pwd, PASSWORD_DEFAULT),
-                'created_at'    => $users[$username]['created_at'] ?? time(),
-            ];
-            save_users($users);
+            $was_existing = set_user_password($username, password_hash($new_pwd, PASSWORD_DEFAULT));
             unset($_SESSION['rp_attempts'], $_SESSION['rp_last_attempt']);
             throttle_reset($ip_key);
             $_SESSION['username'] = $username; // per l'audit_log qui sotto

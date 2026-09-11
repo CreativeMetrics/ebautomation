@@ -1,17 +1,11 @@
 <?php
-define('CONFIG_FILE',        __DIR__ . '/config.json');
-define('REGOLE_FILE',        __DIR__ . '/regole_sconti.json');
-define('LOG_FILE',           __DIR__ . '/webhook_log.txt');
-define('THROTTLE_FILE',      __DIR__ . '/login_throttle.json');
-define('SECRET_KEY_FILE',    __DIR__ . '/secret.php');
-define('PROCESSED_FILE',     __DIR__ . '/processed_orders.json');
-define('FAILED_ORDERS_FILE', __DIR__ . '/failed_orders.json');
-define('ALERT_STATE_FILE',   __DIR__ . '/alert_state.json');
-define('USERS_FILE',         __DIR__ . '/users.json');
-define('AUDIT_LOG_FILE',     __DIR__ . '/audit_log.txt');
+define('LOG_FILE',        __DIR__ . '/webhook_log.txt');
+define('SECRET_KEY_FILE', __DIR__ . '/secret.php');
+define('AUDIT_LOG_FILE',  __DIR__ . '/audit_log.txt');
+define('DB_FILE',         __DIR__ . '/database.sqlite');
 
 /**
- * Chiave di cifratura per i segreti salvati in config.json (api_token,
+ * Chiave di cifratura per i segreti salvati in config (api_token,
  * smtp_pass). Viene generata una sola volta e conservata in un file .php:
  * essendo eseguito dal webserver come codice (non produce output), non è
  * mai scaricabile come testo — a differenza di un .json/.txt, la cui
@@ -37,7 +31,7 @@ function encrypt_secret(string $plain): string {
 
 function decrypt_secret(string $value): string {
     if ($value === '' || !str_starts_with($value, 'enc:v1:')) {
-        return $value; // valore in chiaro (config legacy non ancora migrata) o vuoto
+        return $value; // valore in chiaro (dato legacy non ancora migrato) o vuoto
     }
     $raw = base64_decode(substr($value, 7));
     if ($raw === false || strlen($raw) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) return '';
@@ -46,6 +40,162 @@ function decrypt_secret(string $value): string {
     $plain  = sodium_crypto_secretbox_open($ct, $nonce, get_secret_key());
     return $plain !== false ? $plain : '';
 }
+
+// ── DATABASE ────────────────────────────────────────────────────────────────
+// Storage applicativo (config, regole, ordini processati, utenti, coda
+// falliti, throttle, stato alert) su SQLite invece di singoli file JSON:
+// scritture/letture per-riga realmente atomiche (niente più "riscrivi tutto
+// il file ad ogni modifica"), transazioni vere per le sezioni critiche
+// (idempotenza ordini), un solo file da includere nei backup.
+// I log (webhook_log.txt, audit_log.txt) restano file di testo append-only:
+// sono già efficienti così e non hanno bisogno di query relazionali.
+
+function db(): PDO {
+    static $pdo = null;
+    if ($pdo !== null) return $pdo;
+    $pdo = new PDO('sqlite:' . DB_FILE);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->exec('PRAGMA journal_mode = WAL');   // permette letture concorrenti durante una scrittura
+    $pdo->exec('PRAGMA busy_timeout = 5000');  // attende invece di fallire subito se il DB è momentaneamente locked
+    $pdo->exec('PRAGMA foreign_keys = ON');
+    ensure_schema($pdo);
+    migrate_legacy_json_if_needed($pdo);
+    return $pdo;
+}
+
+function ensure_schema(PDO $pdo): void {
+    $pdo->exec('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS regole (trigger_id TEXT PRIMARY KEY, data TEXT)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS processed_orders (
+        order_id TEXT PRIMARY KEY, ts INTEGER, status TEXT, discounts TEXT, email_sent_targets TEXT
+    )');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_processed_orders_ts ON processed_orders(ts)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS failed_orders (order_id TEXT PRIMARY KEY, ts INTEGER, api_url TEXT, reason TEXT)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT, created_at INTEGER)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS throttle (key TEXT PRIMARY KEY, count INTEGER, first INTEGER)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS alert_state (id INTEGER PRIMARY KEY, last_ts INTEGER, last_count INTEGER)');
+}
+
+/**
+ * Esegue $fn dentro una transazione con lock di scrittura acquisito subito
+ * (BEGIN IMMEDIATE, non il BEGIN differito di default di PDO): è
+ * l'equivalente SQLite del flock() usato in precedenza su atomic_json_update
+ * — evita che due richieste concorrenti leggano entrambe lo stesso stato
+ * "non ancora completo" prima che una delle due scriva (es. due consegne
+ * quasi simultanee dello stesso webhook Eventbrite).
+ */
+function db_atomic(callable $fn) {
+    $pdo = db();
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        $result = $fn($pdo);
+        $pdo->exec('COMMIT');
+        return $result;
+    } catch (Throwable $e) {
+        $pdo->exec('ROLLBACK');
+        throw $e;
+    }
+}
+
+/**
+ * Importa una tantum i dati da una precedente installazione basata su file
+ * JSON (config.json, regole_sconti.json, processed_orders.json, users.json,
+ * failed_orders.json), se il DB è ancora vuoto e quei file esistono. I file
+ * originali vengono rinominati in *.migrated al termine, così restano
+ * consultabili ma non vengono più letti dall'app.
+ */
+function migrate_legacy_json_if_needed(PDO $pdo): void {
+    static $checked = false;
+    if ($checked) return;
+    $checked = true;
+
+    $has_config = (int)$pdo->query('SELECT COUNT(*) FROM config')->fetchColumn();
+    if ($has_config > 0) return; // DB già popolato, niente da migrare
+
+    $legacy_config = __DIR__ . '/config.json';
+    $legacy_regole = __DIR__ . '/regole_sconti.json';
+    $legacy_proc   = __DIR__ . '/processed_orders.json';
+    $legacy_users  = __DIR__ . '/users.json';
+    $legacy_failed = __DIR__ . '/failed_orders.json';
+    if (!file_exists($legacy_config) && !file_exists($legacy_users)) return; // installazione nuova, nessun file legacy
+
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        $conf_data = [];
+        if (file_exists($legacy_config)) {
+            $conf_data = json_decode(file_get_contents($legacy_config), true) ?: [];
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)');
+            foreach ($conf_data as $k => $v) {
+                if ($k === 'dashboard_password') continue; // migrata sotto in users, non serve più in config
+                $stmt->execute([$k, is_bool($v) ? ($v ? '1' : '0') : (string)$v]);
+            }
+        }
+
+        if (file_exists($legacy_regole)) {
+            $regole = json_decode(file_get_contents($legacy_regole), true) ?: [];
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO regole (trigger_id, data) VALUES (?, ?)');
+            foreach ($regole as $tid => $rule) $stmt->execute([(string)$tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+        }
+
+        if (file_exists($legacy_proc)) {
+            $proc = json_decode(file_get_contents($legacy_proc), true) ?: [];
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO processed_orders (order_id, ts, status, discounts, email_sent_targets) VALUES (?,?,?,?,?)');
+            foreach ($proc as $oid => $v) {
+                if (is_array($v)) {
+                    $ts     = (int)($v['ts'] ?? 0);
+                    if (isset($v['status'], $v['discounts'])) {
+                        // formato già "nuovo" (con retry/coda) scritto da una versione precedente su file
+                        $status    = $v['status'];
+                        $discounts = $v['discounts'];
+                        $emailed   = $v['email_sent_targets'] ?? [];
+                    } else {
+                        // formato molto vecchio: solo un elenco piatto di discount_ids, senza mappa per target
+                        $status    = 'complete';
+                        $discounts = [];
+                        $emailed   = [];
+                        $i = 0;
+                        foreach (($v['discount_ids'] ?? []) as $did) $discounts['legacy_' . ($i++)] = $did;
+                    }
+                } else {
+                    $ts = (int)$v; $status = 'complete'; $discounts = []; $emailed = [];
+                }
+                $stmt->execute([(string)$oid, $ts, $status, json_encode($discounts), json_encode($emailed)]);
+            }
+        }
+
+        if (file_exists($legacy_users)) {
+            $users = json_decode(file_get_contents($legacy_users), true) ?: [];
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO users (username, password_hash, created_at) VALUES (?,?,?)');
+            foreach ($users as $uname => $u) {
+                $stmt->execute([(string)$uname, $u['password_hash'] ?? '', (int)($u['created_at'] ?? time())]);
+            }
+        } elseif (!empty($conf_data['dashboard_password'])) {
+            // installazione ancora più vecchia: password singola senza mai essere passata da users.json
+            $pdo->prepare('INSERT OR REPLACE INTO users (username, password_hash, created_at) VALUES (?,?,?)')
+                ->execute(['admin', $conf_data['dashboard_password'], time()]);
+        }
+
+        if (file_exists($legacy_failed)) {
+            $failed = json_decode(file_get_contents($legacy_failed), true) ?: [];
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO failed_orders (order_id, ts, api_url, reason) VALUES (?,?,?,?)');
+            foreach ($failed as $oid => $f) {
+                $stmt->execute([(string)$oid, (int)($f['ts'] ?? 0), $f['api_url'] ?? '', $f['reason'] ?? '']);
+            }
+        }
+
+        $pdo->exec('COMMIT');
+
+        foreach ([$legacy_config, $legacy_regole, $legacy_proc, $legacy_users, $legacy_failed] as $f) {
+            if (file_exists($f)) @rename($f, $f . '.migrated');
+        }
+        write_log('Migrazione dati da file JSON a SQLite completata.');
+    } catch (Throwable $e) {
+        $pdo->exec('ROLLBACK');
+        write_log('ERRORE migrazione JSON->SQLite: ' . $e->getMessage());
+    }
+}
+
+// ── CONFIGURAZIONE ────────────────────────────────────────────────────────────
 
 function load_config(): array {
     $defaults = [
@@ -58,7 +208,6 @@ function load_config(): array {
         'smtp_port'          => '465',
         'smtp_encryption'    => 'smtps',
         'currency'           => 'EUR',
-        'dashboard_password' => '',
         'webhook_token'      => '',
         'paused'             => false,
         'email_subject'      => 'I tuoi regali da {{business_name}}',
@@ -68,13 +217,13 @@ function load_config(): array {
         'alert_email'        => '',
         'alert_threshold'    => '3',
     ];
-    if (!file_exists(CONFIG_FILE)) return $defaults;
-    $data = json_decode(file_get_contents(CONFIG_FILE), true);
-    $conf = array_merge($defaults, (array)$data);
+    $rows = db()->query('SELECT key, value FROM config')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $conf = array_merge($defaults, $rows);
+    $conf['paused'] = filter_var($conf['paused'], FILTER_VALIDATE_BOOLEAN);
     // api_token e smtp_pass sono cifrati a riposo (vedi save_config);
     // decrypt_secret restituisce il valore invariato se non è cifrato,
-    // quindi una config esistente in chiaro continua a funzionare e
-    // viene migrata automaticamente al primo save_config().
+    // quindi un dato legacy in chiaro continua a funzionare e viene
+    // ricifrato automaticamente al primo save_config().
     $conf['api_token'] = decrypt_secret((string)$conf['api_token']);
     $conf['smtp_pass'] = decrypt_secret((string)$conf['smtp_pass']);
     return $conf;
@@ -84,7 +233,13 @@ function save_config(array $config): void {
     make_config_backup(); // backup della versione precedente prima di sovrascrivere
     if (isset($config['api_token'])) $config['api_token'] = encrypt_secret((string)$config['api_token']);
     if (isset($config['smtp_pass'])) $config['smtp_pass'] = encrypt_secret((string)$config['smtp_pass']);
-    file_put_contents(CONFIG_FILE, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+    db_atomic(function (PDO $pdo) use ($config) {
+        $stmt = $pdo->prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)');
+        foreach ($config as $k => $v) {
+            if (is_bool($v)) $v = $v ? '1' : '0';
+            $stmt->execute([$k, (string)$v]);
+        }
+    });
 }
 
 /**
@@ -114,19 +269,19 @@ function password_issue(string $pwd): ?string {
 }
 
 /**
- * Copia $file in backups/<prefix>_YYYYMMDD_HHMMSS.<ext>, tenendo solo gli
- * ultimi $keep. Usata sia per regole_sconti.json che per config.json.
+ * Esporta un array associativo in backups/<prefix>_YYYYMMDD_HHMMSS.json,
+ * tenendo solo gli ultimi $keep. Usata per config e regole: il backup resta
+ * un file JSON leggibile anche se lo storage applicativo è SQLite.
  */
-function make_backup(string $file, string $prefix, int $keep = 10): void {
-    if (!is_readable($file)) return;
-    $dir = dirname($file) . '/backups';
+function make_backup(array $data, string $prefix, int $keep = 10): void {
+    if (empty($data)) return;
+    $dir = __DIR__ . '/backups';
     if (!is_dir($dir)) {
         mkdir($dir, 0755, true);
         file_put_contents($dir . '/.htaccess', "Deny from all\n");
     }
-    $ext = pathinfo($file, PATHINFO_EXTENSION) ?: 'json';
-    copy($file, $dir . '/' . $prefix . '_' . date('Ymd_His') . '.' . $ext);
-    $files = glob($dir . '/' . $prefix . '_*.' . $ext) ?: [];
+    file_put_contents($dir . '/' . $prefix . '_' . date('Ymd_His') . '.json', json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    $files = glob($dir . '/' . $prefix . '_*.json') ?: [];
     sort($files);
     foreach (array_slice($files, 0, max(0, count($files) - $keep)) as $old) {
         unlink($old);
@@ -134,17 +289,43 @@ function make_backup(string $file, string $prefix, int $keep = 10): void {
 }
 
 function make_regole_backup(): void {
-    make_backup(REGOLE_FILE, 'regole');
+    make_backup(load_regole(), 'regole');
 }
 
 function make_config_backup(): void {
-    make_backup(CONFIG_FILE, 'config');
+    make_backup(db()->query('SELECT key, value FROM config')->fetchAll(PDO::FETCH_KEY_PAIR), 'config');
 }
 
+// ── REGOLE SCONTI ─────────────────────────────────────────────────────────────
+
 function load_regole(): array {
-    if (!is_readable(REGOLE_FILE)) return [];
-    return json_decode(file_get_contents(REGOLE_FILE), true) ?: [];
+    $rows = db()->query('SELECT trigger_id, data FROM regole')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $out = [];
+    foreach ($rows as $tid => $json) $out[$tid] = json_decode($json, true) ?: [];
+    return $out;
 }
+
+function save_regola_rule(string $trigger_id, array $rule): void {
+    make_regole_backup();
+    db()->prepare('INSERT OR REPLACE INTO regole (trigger_id, data) VALUES (?, ?)')
+        ->execute([$trigger_id, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+}
+
+function delete_regola_rule(string $trigger_id): void {
+    make_regole_backup();
+    db()->prepare('DELETE FROM regole WHERE trigger_id = ?')->execute([$trigger_id]);
+}
+
+function replace_all_regole(array $regole): void {
+    make_regole_backup();
+    db_atomic(function (PDO $pdo) use ($regole) {
+        $pdo->exec('DELETE FROM regole');
+        $stmt = $pdo->prepare('INSERT INTO regole (trigger_id, data) VALUES (?, ?)');
+        foreach ($regole as $tid => $rule) $stmt->execute([(string)$tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+    });
+}
+
+// ── LOG ───────────────────────────────────────────────────────────────────────
 
 function rotate_logs(): void {
     static $done = false;
@@ -195,61 +376,34 @@ function send_security_headers(): void {
     header('Referrer-Policy: same-origin');
 }
 
-/**
- * Legge, modifica e riscrive un file JSON in una singola sezione critica
- * protetta da flock, per evitare race condition read-modify-write tra
- * richieste concorrenti (es. webhook duplicati inviati da Eventbrite).
- * $mutator riceve l'array decodificato (o [] se il file è vuoto/assente)
- * e deve restituire l'array da salvare.
- */
-function atomic_json_update(string $file, callable $mutator): array {
-    $fp = fopen($file, 'c+');
-    if (!$fp) return [];
-    flock($fp, LOCK_EX);
-    $size = filesize($file) ?: 0;
-    $raw  = $size > 0 ? fread($fp, $size) : '';
-    $data = $raw !== '' ? (json_decode($raw, true) ?: []) : [];
-    $data = $mutator($data);
-    ftruncate($fp, 0);
-    rewind($fp);
-    fwrite($fp, json_encode($data));
-    fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
-    return $data;
-}
+// ── RATE LIMITING PER IP ────────────────────────────────────────────────────────
+// Complemento al throttling basato su sessione: quest'ultimo da solo è
+// aggirabile semplicemente non inviando il cookie di sessione.
 
-/**
- * Rate limiting per IP (indipendente dalla sessione/cookie), a complemento
- * del throttling basato su sessione: quest'ultimo da solo è aggirabile
- * semplicemente non inviando il cookie di sessione.
- */
 function throttle_allowed(string $key, int $max, int $window): bool {
-    $data  = file_exists(THROTTLE_FILE) ? (json_decode(file_get_contents(THROTTLE_FILE), true) ?: []) : [];
-    $entry = $data[$key] ?? null;
-    if (!$entry || (time() - $entry['first']) > $window) return true;
-    return $entry['count'] < $max;
+    $stmt = db()->prepare('SELECT count, first FROM throttle WHERE key = ?');
+    $stmt->execute([$key]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row || (time() - (int)$row['first']) > $window) return true;
+    return (int)$row['count'] < $max;
 }
 
 function throttle_hit(string $key, int $window): void {
-    atomic_json_update(THROTTLE_FILE, function (array $data) use ($key, $window) {
-        foreach ($data as $k => $v) {
-            if ((time() - $v['first']) > $window) unset($data[$k]);
+    db_atomic(function (PDO $pdo) use ($key, $window) {
+        $pdo->prepare('DELETE FROM throttle WHERE first < ?')->execute([time() - $window]);
+        $stmt = $pdo->prepare('SELECT count, first FROM throttle WHERE key = ?');
+        $stmt->execute([$key]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row || (time() - (int)$row['first']) > $window) {
+            $pdo->prepare('INSERT OR REPLACE INTO throttle (key, count, first) VALUES (?, 1, ?)')->execute([$key, time()]);
+        } else {
+            $pdo->prepare('UPDATE throttle SET count = count + 1 WHERE key = ?')->execute([$key]);
         }
-        $entry = $data[$key] ?? ['count' => 0, 'first' => time()];
-        if ((time() - $entry['first']) > $window) $entry = ['count' => 0, 'first' => time()];
-        $entry['count']++;
-        $data[$key] = $entry;
-        return $data;
     });
 }
 
 function throttle_reset(string $key): void {
-    if (!file_exists(THROTTLE_FILE)) return;
-    atomic_json_update(THROTTLE_FILE, function (array $data) use ($key) {
-        unset($data[$key]);
-        return $data;
-    });
+    db()->prepare('DELETE FROM throttle WHERE key = ?')->execute([$key]);
 }
 
 /**
@@ -296,6 +450,80 @@ function resolve_event_org_id(string $event_id, string $api_token): ?string {
     return $cache[$event_id] = ($org_id !== '' ? $org_id : null);
 }
 
+// ── ORDINI PROCESSATI (idempotenza + retry) ─────────────────────────────────────
+
+/**
+ * Apre (o riapre) la "sezione di lavoro" per un ordine in una transazione
+ * atomica: se l'ordine è già completo lo segnala e non tocca nulla; altrimenti
+ * crea/mantiene la riga a status 'partial' e restituisce gli sconti/email già
+ * noti da un tentativo precedente, così chi chiama può riprendere da lì senza
+ * ricreare sconti né rimandare email già inviate. Pulisce anche gli ordini più
+ * vecchi di 30 giorni.
+ */
+function claim_processed_order(string $order_id): array {
+    return db_atomic(function (PDO $pdo) use ($order_id) {
+        $cutoff = time() - 30 * 86400;
+        $pdo->prepare('DELETE FROM processed_orders WHERE ts < ? AND order_id != ?')->execute([$cutoff, $order_id]);
+
+        $stmt = $pdo->prepare('SELECT status, discounts, email_sent_targets FROM processed_orders WHERE order_id = ?');
+        $stmt->execute([$order_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($row && $row['status'] === 'complete') {
+            return ['already_complete' => true, 'discounts' => [], 'email_sent_targets' => []];
+        }
+
+        $discounts = $row ? (json_decode($row['discounts'], true) ?: []) : [];
+        $emailed   = $row ? (json_decode($row['email_sent_targets'], true) ?: []) : [];
+        $pdo->prepare('INSERT OR REPLACE INTO processed_orders (order_id, ts, status, discounts, email_sent_targets) VALUES (?,?,?,?,?)')
+            ->execute([$order_id, time(), 'partial', json_encode($discounts), json_encode($emailed)]);
+
+        return ['already_complete' => false, 'discounts' => $discounts, 'email_sent_targets' => $emailed];
+    });
+}
+
+function finalize_processed_order(string $order_id, array $discounts, array $email_sent_targets, bool $is_complete): void {
+    db()->prepare('INSERT OR REPLACE INTO processed_orders (order_id, ts, status, discounts, email_sent_targets) VALUES (?,?,?,?,?)')
+        ->execute([$order_id, time(), $is_complete ? 'complete' : 'partial', json_encode($discounts), json_encode($email_sent_targets)]);
+}
+
+/** Voce grezza per il flusso rimborsi (legge gli sconti tracciati per un ordine, se esiste). */
+function get_processed_order(string $order_id): ?array {
+    $stmt = db()->prepare('SELECT ts, status, discounts, email_sent_targets FROM processed_orders WHERE order_id = ?');
+    $stmt->execute([$order_id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
+    return [
+        'ts'                 => (int)$row['ts'],
+        'status'             => $row['status'],
+        'discounts'          => json_decode($row['discounts'], true) ?: [],
+        'email_sent_targets' => json_decode($row['email_sent_targets'], true) ?: [],
+    ];
+}
+
+function count_processed_orders(): int {
+    return (int)db()->query('SELECT COUNT(*) FROM processed_orders')->fetchColumn();
+}
+
+/** Ultimi $limit ordini processati, più recenti prima. */
+function list_recent_processed_orders(int $limit = 25): array {
+    $stmt = db()->prepare('SELECT order_id, ts, status, discounts, email_sent_targets FROM processed_orders ORDER BY ts DESC LIMIT ?');
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->execute();
+    $out = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[$r['order_id']] = [
+            'ts'                 => (int)$r['ts'],
+            'status'             => $r['status'],
+            'discounts'          => json_decode($r['discounts'], true) ?: [],
+            'email_sent_targets' => json_decode($r['email_sent_targets'], true) ?: [],
+        ];
+    }
+    return $out;
+}
+
+// ── CODA ORDINI FALLITI ──────────────────────────────────────────────────────
+
 /**
  * Coda degli ordini che, dopo i retry immediati, restano con almeno uno
  * sconto o l'email ancora da completare. Consultata dalla dashboard
@@ -303,46 +531,58 @@ function resolve_event_org_id(string $event_id, string $api_token): ?string {
  * aspettare un nuovo webhook da Eventbrite.
  */
 function queue_failed_order(string $order_id, string $api_url, string $reason): void {
-    atomic_json_update(FAILED_ORDERS_FILE, function (array $data) use ($order_id, $api_url, $reason) {
-        $data[$order_id] = ['ts' => time(), 'api_url' => $api_url, 'reason' => $reason];
-        return $data;
-    });
+    db()->prepare('INSERT OR REPLACE INTO failed_orders (order_id, ts, api_url, reason) VALUES (?,?,?,?)')
+        ->execute([$order_id, time(), $api_url, $reason]);
 }
 
 function unqueue_failed_order(string $order_id): void {
-    if (!file_exists(FAILED_ORDERS_FILE)) return;
-    atomic_json_update(FAILED_ORDERS_FILE, function (array $data) use ($order_id) {
-        unset($data[$order_id]);
-        return $data;
-    });
+    db()->prepare('DELETE FROM failed_orders WHERE order_id = ?')->execute([$order_id]);
 }
 
 function load_failed_orders(): array {
-    if (!file_exists(FAILED_ORDERS_FILE)) return [];
-    return json_decode(file_get_contents(FAILED_ORDERS_FILE), true) ?: [];
+    $rows = db()->query('SELECT order_id, ts, api_url, reason FROM failed_orders ORDER BY ts DESC')->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[$r['order_id']] = ['ts' => (int)$r['ts'], 'api_url' => $r['api_url'], 'reason' => $r['reason']];
+    }
+    return $out;
+}
+
+// ── UTENTI ────────────────────────────────────────────────────────────────────
+
+function load_users(): array {
+    $rows = db()->query('SELECT username, password_hash, created_at FROM users')->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) $out[$r['username']] = ['password_hash' => $r['password_hash'], 'created_at' => (int)$r['created_at']];
+    return $out;
+}
+
+/** Crea un nuovo utente (o lo sovrascrive se il nome esiste già). */
+function add_user_row(string $username, string $password_hash): void {
+    db()->prepare('INSERT OR REPLACE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)')
+        ->execute([$username, $password_hash, time()]);
 }
 
 /**
- * Utenti della dashboard. Se users.json non esiste ancora ma è presente
- * una password singola "legacy" in config.json (installazioni create prima
- * dell'introduzione del multi-utente), viene migrata automaticamente in un
- * unico utente "admin" la prima volta che load_users() viene chiamata.
+ * Reimposta la password di un utente esistente (preservando created_at) o
+ * lo crea se non esiste ancora. Ritorna true se l'utente esisteva già.
  */
-function load_users(): array {
-    if (file_exists(USERS_FILE)) {
-        return json_decode(file_get_contents(USERS_FILE), true) ?: [];
-    }
-    $conf = load_config();
-    if (!empty($conf['dashboard_password'])) {
-        $users = ['admin' => ['password_hash' => $conf['dashboard_password'], 'created_at' => time()]];
-        save_users($users);
-        return $users;
-    }
-    return [];
+function set_user_password(string $username, string $password_hash): bool {
+    return db_atomic(function (PDO $pdo) use ($username, $password_hash) {
+        $stmt = $pdo->prepare('SELECT 1 FROM users WHERE username = ?');
+        $stmt->execute([$username]);
+        $existing = (bool)$stmt->fetchColumn();
+        if ($existing) {
+            $pdo->prepare('UPDATE users SET password_hash = ? WHERE username = ?')->execute([$password_hash, $username]);
+        } else {
+            $pdo->prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)')->execute([$username, $password_hash, time()]);
+        }
+        return $existing;
+    });
 }
 
-function save_users(array $users): void {
-    file_put_contents(USERS_FILE, json_encode($users, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+function delete_user_row(string $username): void {
+    db()->prepare('DELETE FROM users WHERE username = ?')->execute([$username]);
 }
 
 /**
@@ -356,6 +596,17 @@ function audit_log(string $action, string $detail = ''): void {
     $ip   = $_SERVER['REMOTE_ADDR'] ?? '-';
     $line = '[' . date('Y-m-d H:i:s') . "] $user ($ip): $action" . ($detail !== '' ? " — $detail" : '') . "\n";
     file_put_contents(AUDIT_LOG_FILE, $line, FILE_APPEND | LOCK_EX);
+}
+
+// ── ALERT ERRORI ──────────────────────────────────────────────────────────────
+
+function get_alert_state(): array {
+    $row = db()->query('SELECT last_ts, last_count FROM alert_state WHERE id = 1')->fetch(PDO::FETCH_ASSOC);
+    return $row ? ['last_ts' => (int)$row['last_ts'], 'last_count' => (int)$row['last_count']] : ['last_ts' => 0, 'last_count' => 0];
+}
+
+function set_alert_state(int $ts, int $count): void {
+    db()->prepare('INSERT OR REPLACE INTO alert_state (id, last_ts, last_count) VALUES (1, ?, ?)')->execute([$ts, $count]);
 }
 
 /**
@@ -379,10 +630,8 @@ function maybe_send_error_alert(array $conf): void {
     }
     if ($today_errors < $threshold) return;
 
-    $state      = file_exists(ALERT_STATE_FILE) ? (json_decode(file_get_contents(ALERT_STATE_FILE), true) ?: []) : [];
-    $last_ts    = (int)($state['last_ts'] ?? 0);
-    $last_count = (int)($state['last_count'] ?? 0);
-    if ((time() - $last_ts) < $window && $today_errors <= $last_count) return;
+    $state = get_alert_state();
+    if ((time() - $state['last_ts']) < $window && $today_errors <= $state['last_count']) return;
 
     $alert_email = $conf['alert_email'] ?: $conf['smtp_user'];
     if (!filter_var($alert_email, FILTER_VALIDATE_EMAIL)) return;
@@ -411,7 +660,7 @@ function maybe_send_error_alert(array $conf): void {
             . ($host ? "\n\nControlla la dashboard: https://$host/dashboard.php?tab=log" : '')
             . "\n\nQuesto avviso viene inviato al massimo una volta ogni ora.";
         $mail->send();
-        file_put_contents(ALERT_STATE_FILE, json_encode(['last_ts' => time(), 'last_count' => $today_errors]), LOCK_EX);
+        set_alert_state(time(), $today_errors);
         write_log("Alert email inviato a $alert_email ($today_errors errori oggi).");
     } catch (\PHPMailer\PHPMailer\Exception $e) {
         write_log('ERRORE invio alert admin: ' . $mail->ErrorInfo);

@@ -35,7 +35,7 @@ if (empty($users)) {
             $conf['business_name'] = $bname ?: ($conf['business_name'] ?: 'La nostra Azienda');
             if (empty($conf['webhook_token'])) $conf['webhook_token'] = bin2hex(random_bytes(16));
             save_config($conf);
-            save_users(['admin' => ['password_hash' => password_hash($pwd, PASSWORD_DEFAULT), 'created_at' => time()]]);
+            add_user_row('admin', password_hash($pwd, PASSWORD_DEFAULT));
             $_SESSION['authenticated'] = true;
             $_SESSION['username']      = 'admin';
             audit_log('Setup iniziale completato');
@@ -95,27 +95,21 @@ if (isset($_GET['logout'])) {
 if (($_GET['action'] ?? '') === 'export_regole') {
     header('Content-Type: application/json; charset=utf-8');
     header('Content-Disposition: attachment; filename="regole_sconti_' . date('Y-m-d') . '.json"');
-    echo is_readable(REGOLE_FILE) ? file_get_contents(REGOLE_FILE) : '{}';
+    echo json_encode(load_regole(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 // ── EXPORT ORDINI CSV ─────────────────────────────────────────────────────────
 if (($_GET['action'] ?? '') === 'export_orders_csv') {
-    $all_proc = file_exists(PROCESSED_FILE) ? (json_decode(file_get_contents(PROCESSED_FILE), true) ?: []) : [];
-    uasort($all_proc, fn($a, $b) => (is_array($b) ? ($b['ts'] ?? 0) : (int)$b) - (is_array($a) ? ($a['ts'] ?? 0) : (int)$a));
+    $all_proc = list_recent_processed_orders(1000000); // già ordinati per ts DESC
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="ordini_processati_' . date('Y-m-d') . '.csv"');
     $out = fopen('php://output', 'w');
     fputcsv($out, ['order_id', 'data_ora', 'stato', 'sconti_creati', 'target_ids', 'email_inviata']);
     foreach ($all_proc as $oid => $v) {
-        $ts       = is_array($v) ? ($v['ts'] ?? 0) : (int)$v;
-        $status   = is_array($v) ? ($v['status'] ?? '') : '';
-        $discounts = is_array($v['discounts'] ?? null) ? $v['discounts'] : [];
-        $legacy_ids = is_array($v['discount_ids'] ?? null) ? $v['discount_ids'] : [];
-        $n_sconti = !empty($discounts) ? count($discounts) : count($legacy_ids);
-        $emailed  = is_array($v['email_sent_targets'] ?? null) && !empty($v['email_sent_targets']);
-        fputcsv($out, [$oid, date('Y-m-d H:i:s', $ts), $status ?: '—', $n_sconti, implode('|', array_keys($discounts)), $emailed ? 'si' : 'no']);
+        $emailed = !empty($v['email_sent_targets']);
+        fputcsv($out, [$oid, date('Y-m-d H:i:s', $v['ts']), $v['status'] ?: '—', count($v['discounts']), implode('|', array_keys($v['discounts'])), $emailed ? 'si' : 'no']);
     }
     fclose($out);
     exit;
@@ -166,8 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     header('Location: dashboard.php?tab=config');
                     exit;
                 }
-                $users[$current_username]['password_hash'] = password_hash($new_pwd, PASSWORD_DEFAULT);
-                save_users($users);
+                set_user_password($current_username, password_hash($new_pwd, PASSWORD_DEFAULT));
                 audit_log('Password personale cambiata');
             }
             if (isset($_FILES['logo']) && $_FILES['logo']['error'] === UPLOAD_ERR_OK) {
@@ -194,8 +187,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($issue = password_issue($new_upwd)) {
                 $_SESSION['flash_error'] = $issue;
             } else {
-                $users[$new_uname] = ['password_hash' => password_hash($new_upwd, PASSWORD_DEFAULT), 'created_at' => time()];
-                save_users($users);
+                add_user_row($new_uname, password_hash($new_upwd, PASSWORD_DEFAULT));
                 audit_log('Utente creato', $new_uname);
                 $_SESSION['flash_ok'] = "Utente \"$new_uname\" creato.";
             }
@@ -209,8 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($del_uname === $current_username) {
                 $_SESSION['flash_error'] = 'Non puoi eliminare l\'utente con cui hai effettuato l\'accesso.';
             } elseif (isset($users[$del_uname])) {
-                unset($users[$del_uname]);
-                save_users($users);
+                delete_user_row($del_uname);
                 audit_log('Utente eliminato', $del_uname);
                 $_SESSION['flash_ok'] = "Utente \"$del_uname\" eliminato.";
             }
@@ -377,7 +368,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                make_regole_backup();
                 $regole[$tid] = [
                     'descrizione'     => trim($_POST['descrizione']    ?? ''),
                     'tipo_sconto'     => $tipo,
@@ -389,7 +379,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'giorni_scadenza' => max(0, (int)($_POST['giorni_scadenza'] ?? 0)),
                     'qty_minima'      => max(1, (int)($_POST['qty_minima']      ?? 1)),
                 ];
-                file_put_contents(REGOLE_FILE, json_encode($regole, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                save_regola_rule($tid, $regole[$tid]);
                 audit_log('Regola salvata', $tid);
 
                 if (!empty($ev_names)) {
@@ -407,10 +397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'delete_regola':
             $tid = trim($_POST['trigger_id'] ?? '');
             if ($tid) {
-                make_regole_backup();
-                $regole = load_regole();
-                unset($regole[$tid]);
-                file_put_contents(REGOLE_FILE, json_encode($regole, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                delete_regola_rule($tid);
                 audit_log('Regola eliminata', $tid);
                 header('Location: dashboard.php?tab=sconti&msg=ok');
                 exit;
@@ -428,8 +415,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (!isset($r['descrizione'], $r['codice_prefix'], $r['target_ids'])) { $valid = false; break; }
                     }
                     if ($valid) {
-                        make_regole_backup();
-                        file_put_contents(REGOLE_FILE, json_encode($imported, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                        replace_all_regole($imported);
                         audit_log('Regole importate', count($imported) . ' regole');
                         $_SESSION['flash_ok'] = 'Importate ' . count($imported) . ' regole con successo.';
                     } else {
@@ -1049,13 +1035,7 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
     </div>
 
     <?php
-    $proc_file    = __DIR__ . '/processed_orders.json';
-    $recent_orders = [];
-    if (file_exists($proc_file)) {
-        $all_proc = json_decode(file_get_contents($proc_file), true) ?: [];
-        uasort($all_proc, fn($a, $b) => (is_array($b) ? $b['ts'] : (int)$b) - (is_array($a) ? $a['ts'] : (int)$a));
-        $recent_orders = array_slice($all_proc, 0, 25, true);
-    }
+    $recent_orders = list_recent_processed_orders(25);
     $failed_orders = load_failed_orders();
     ?>
     <?php if (!empty($failed_orders)): ?>
@@ -1088,22 +1068,12 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
         <table>
             <thead><tr><th>Order ID</th><th>Data / Ora</th><th>Stato</th><th>Sconti tracciati</th></tr></thead>
             <tbody>
-            <?php foreach ($recent_orders as $oid => $v):
-                $ts     = is_array($v) ? ($v['ts'] ?? 0) : (int)$v;
-                $status = is_array($v) ? ($v['status'] ?? '') : '';
-                if (is_array($v) && isset($v['discounts'])) {
-                    $count = count($v['discounts']);
-                } elseif (is_array($v) && isset($v['discount_ids'])) {
-                    $count = count($v['discount_ids']); // formato precedente
-                } else {
-                    $count = '—';
-                }
-            ?>
+            <?php foreach ($recent_orders as $oid => $v): ?>
                 <tr>
                     <td><span class="badge"><?= h($oid) ?></span></td>
-                    <td style="color:#64748b;"><?= date('d/m/Y H:i:s', $ts) ?></td>
-                    <td><?= $status === 'partial' ? '<span style="color:#f59e0b;font-weight:700;">⚠ parziale</span>' : ($status === 'complete' ? '<span style="color:#10b981;">✓ completo</span>' : '—') ?></td>
-                    <td style="color:#64748b;"><?= $count ?></td>
+                    <td style="color:#64748b;"><?= date('d/m/Y H:i:s', $v['ts']) ?></td>
+                    <td><?= $v['status'] === 'partial' ? '<span style="color:#f59e0b;font-weight:700;">⚠ parziale</span>' : ($v['status'] === 'complete' ? '<span style="color:#10b981;">✓ completo</span>' : '—') ?></td>
+                    <td style="color:#64748b;"><?= count($v['discounts']) ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -1403,15 +1373,27 @@ function render_health_check(array $conf): void {
     ];
 
     // 5. Permessi file system
-    $dir_ok  = is_writable(__DIR__);
-    $log_ok  = !file_exists(LOG_FILE)                             ? $dir_ok : is_writable(LOG_FILE);
-    $proc_ok = !file_exists(__DIR__ . '/processed_orders.json')   ? $dir_ok : is_writable(__DIR__ . '/processed_orders.json');
-    $fs_ok   = $dir_ok && $log_ok && $proc_ok;
+    $dir_ok = is_writable(__DIR__);
+    $log_ok = !file_exists(LOG_FILE)         ? $dir_ok : is_writable(LOG_FILE);
+    $db_ok  = !file_exists(DB_FILE)          ? $dir_ok : is_writable(DB_FILE);
+    $fs_ok  = $dir_ok && $log_ok && $db_ok;
     $checks[] = [
         'label'  => 'File System',
         'ok'     => $fs_ok,
-        'detail' => $fs_ok ? 'Cartella e file di log scrivibili.' : 'Problemi di permessi. Verifica i diritti sulla cartella.',
+        'detail' => $fs_ok ? 'Cartella, log e database scrivibili.' : 'Problemi di permessi. Verifica i diritti sulla cartella.',
     ];
+
+    // 5b. Database
+    $db_query_ok = false; $db_detail = 'Database non raggiungibile.';
+    try {
+        db()->query('SELECT 1');
+        $db_query_ok = true;
+        $db_size_mb  = file_exists(DB_FILE) ? round(filesize(DB_FILE) / 1048576, 2) : 0;
+        $db_detail   = "database.sqlite raggiungibile — {$db_size_mb} MB.";
+    } catch (Throwable $e) {
+        $db_detail = 'Errore database: ' . $e->getMessage();
+    }
+    $checks[] = ['label' => 'Database (SQLite)', 'ok' => $db_query_ok, 'detail' => $db_detail];
 
     // 6. Regole attive e pausa
     $regole   = load_regole();

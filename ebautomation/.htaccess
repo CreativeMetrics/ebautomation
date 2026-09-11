@@ -1,11 +1,13 @@
 # Blocca l'accesso diretto via browser ai file di dati e configurazione.
 # Questi file devono restare leggibili solo dagli script PHP dell'app
-# (file_get_contents non passa dal webserver, quindi non è influenzato
-# da queste regole), non scaricabili da chiunque conosca l'URL.
-# Copre: config.json (token API, password SMTP, hash password dashboard),
-# regole_sconti.json, processed_orders.json, login_throttle.json,
-# webhook_log.txt e i suoi archivi mensili, trigger_events.txt/target_events.txt.
-<FilesMatch "\.(json|txt)$">
+# (file_get_contents/PDO non passano dal webserver, quindi non sono
+# influenzati da queste regole), non scaricabili da chiunque conosca l'URL.
+# Copre: database.sqlite (e i file -wal/-shm della modalità WAL) con tutti i
+# dati applicativi (config con token API e password SMTP cifrati, regole,
+# ordini, utenti), webhook_log.txt e i suoi archivi mensili, audit_log.txt,
+# eventuali *.json.migrated residui di una migrazione da installazioni
+# precedenti, trigger_events.txt/target_events.txt.
+<FilesMatch "\.(json|txt|sqlite|sqlite-wal|sqlite-shm|migrated)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -15,5 +17,5 @@
     </IfModule>
 </FilesMatch>
 
-# Le cartelle backups/ (dump periodici di regole_sconti.json) e PHPMailer/
-# hanno un proprio .htaccess/non necessitano di esecuzione PHP diretta.
+# Le cartelle backups/ (dump periodici config/regole) e PHPMailer/ hanno un
+# proprio .htaccess/non necessitano di esecuzione PHP diretta.

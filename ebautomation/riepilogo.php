@@ -23,10 +23,7 @@ if (file_exists(LOG_FILE)) {
 }
 
 // Ordini processati
-$proc_data  = file_exists(__DIR__ . '/processed_orders.json')
-    ? (json_decode(file_get_contents(__DIR__ . '/processed_orders.json'), true) ?: [])
-    : [];
-$proc_count = count($proc_data);
+$proc_count = count_processed_orders();
 
 // URL webhook
 $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';

@@ -1,19 +1,27 @@
 # Dati di runtime e configurazione sensibile: non vanno versionati.
-# config.json contiene in chiaro token API Eventbrite, credenziali SMTP
-# e l'hash della password dashboard; gli altri file sono stato
-# generato/modificato dall'app a runtime, non codice sorgente.
-config.json
+# database.sqlite contiene tutti i dati applicativi (config con token API e
+# password SMTP cifrati, regole, ordini, utenti); gli altri sono log o stato
+# generato dall'app a runtime, non codice sorgente.
+database.sqlite
+database.sqlite-wal
+database.sqlite-shm
 secret.php
 logo.png
 webhook_log.txt
 webhook_log_*.txt
-processed_orders.json
-regole_sconti.json
-login_throttle.json
-failed_orders.json
-alert_state.json
-users.json
 audit_log.txt
 trigger_events.txt
 target_events.txt
 backups/
+
+# File di una precedente installazione basata su file JSON, rinominati
+# automaticamente dopo la migrazione a SQLite (vedi migrate_legacy_json_if_needed
+# in functions.php) — restano sul disco come riferimento ma non sono più letti.
+*.json.migrated
+config.json
+regole_sconti.json
+processed_orders.json
+login_throttle.json
+failed_orders.json
+alert_state.json
+users.json
