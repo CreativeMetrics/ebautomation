@@ -7,6 +7,15 @@ require __DIR__ . '/PHPMailer/Exception.php';
 require __DIR__ . '/PHPMailer/PHPMailer.php';
 require __DIR__ . '/PHPMailer/SMTP.php';
 
+// Ambiente non pronto (estensione mancante, permessi): nessuna pagina HTML da
+// mostrare qui, è un endpoint macchina-a-macchina. Rispondiamo 500 così
+// Eventbrite lo tratta come errore transitorio e ritenta più tardi.
+if ($issue = environment_issue()) {
+    error_log('ebautomation eventbrite-webhook.php: ambiente non pronto: ' . $issue);
+    http_response_code(500);
+    exit;
+}
+
 $conf = load_config();
 
 // 0. Modalità pausa

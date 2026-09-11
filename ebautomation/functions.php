@@ -353,6 +353,41 @@ function h(string $s): string {
     return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+/**
+ * Verifica che l'ambiente PHP abbia il necessario per far funzionare l'app
+ * (estensioni pdo_sqlite e sodium, cartella scrivibile) PRIMA di toccare
+ * config/utenti tramite db(). Senza questo controllo, un hosting con
+ * un'estensione mancante o permessi sbagliati mostrerebbe un errore PHP
+ * grezzo — con tanto di percorsi del server nello stack trace se
+ * display_errors è attivo — invece di un messaggio comprensibile.
+ * Particolarmente critico al primissimo avvio: prima ancora che esista un
+ * utente, è già la prima cosa che il visitatore vede.
+ * Ritorna null se tutto ok, altrimenti un messaggio d'errore comprensibile.
+ */
+function environment_issue(): ?string {
+    if (!extension_loaded('pdo_sqlite') || !in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        return 'L\'estensione PHP "pdo_sqlite" non è disponibile su questo hosting. Chiedi al tuo provider di abilitarla (è quasi sempre già installata, a volte va solo attivata dal pannello di controllo).';
+    }
+    if (!extension_loaded('sodium')) {
+        return 'L\'estensione PHP "sodium" non è disponibile su questo hosting. È necessaria per cifrare le credenziali salvate (token API, password SMTP); chiedi al tuo provider di abilitarla.';
+    }
+    if (!is_writable(__DIR__)) {
+        return 'La cartella dell\'applicazione non è scrivibile dal webserver, quindi non può creare il database. Correggi i permessi della cartella (es. 755) e riprova.';
+    }
+    return null;
+}
+
+/** Pagina d'errore per un ambiente non pronto (vedi environment_issue()). */
+function render_environment_error(string $msg): void {
+    header('Content-Type: text/html; charset=utf-8');
+    http_response_code(500);
+    echo '<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><title>Errore di configurazione del server</title>'
+        . '<style>body{font-family:sans-serif;background:#f8f9fa;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:20px;box-sizing:border-box;}'
+        . '.card{background:white;padding:40px;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,.1);max-width:480px;}'
+        . 'h2{margin-top:0;color:#991b1b;font-size:20px;} p{color:#334155;line-height:1.6;font-size:14px;}</style></head><body>'
+        . '<div class="card"><h2>⚠️ Errore di configurazione del server</h2><p>' . h($msg) . '</p></div></body></html>';
+}
+
 function csrf_token(): string {
     if (session_status() === PHP_SESSION_NONE) session_start();
     if (empty($_SESSION['csrf'])) {

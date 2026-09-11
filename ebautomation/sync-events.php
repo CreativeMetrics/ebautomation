@@ -6,6 +6,11 @@ require __DIR__ . '/functions.php';
 
 send_security_headers();
 
+if ($issue = environment_issue()) {
+    render_environment_error($issue);
+    exit;
+}
+
 if (session_status() === PHP_SESSION_NONE) session_start();
 if (empty($_SESSION['authenticated'])) {
     http_response_code(403);

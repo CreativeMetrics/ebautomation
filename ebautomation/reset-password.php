@@ -8,6 +8,11 @@ require __DIR__ . '/functions.php';
 
 send_security_headers();
 
+if ($issue = environment_issue()) {
+    render_environment_error($issue);
+    exit;
+}
+
 if (session_status() === PHP_SESSION_NONE) {
     $is_https = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     ini_set('session.cookie_httponly', 1);
