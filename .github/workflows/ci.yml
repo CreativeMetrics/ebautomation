@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_sqlite, sqlite3, sodium, curl, mbstring
+          coverage: none
+
+      - name: Lint (php -l su tutti i file PHP)
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            php -l "$f" || status=1
+          done < <(find ebautomation tests -name '*.php' -print0)
+          exit $status
+
+      - name: Test suite
+        run: php tests/run.php

@@ -96,18 +96,26 @@ if ($action === 'order.refunded') {
     exit;
 }
 
-// ── ACQUISTO ─────────────────────────────────────────────────────────────────
-if ($action !== 'order.placed') exit; // ignora altri tipi di evento
+// ── ACQUISTO / MODIFICA ORDINE ────────────────────────────────────────────────
+// order.updated arriva quando un ordine già esistente cambia (es. quantità di
+// biglietti aumentata, partecipanti aggiunti): lo trattiamo con la stessa
+// pipeline di order.placed, ma "riaprendo" anche un ordine già marcato
+// completo per rivalutarlo alla luce dei dati aggiornati — es. una quantità
+// che ora supera una soglia qty_minima prima non raggiunta. Non revoca mai
+// sconti già creati (vedi commento su claim_processed_order): la pipeline
+// crea solo i target ancora mancanti rispetto allo stato attuale dell'ordine.
+if (!in_array($action, ['order.placed', 'order.updated'], true)) exit; // ignora altri tipi di evento
 
 // Verifica e (ri)apre una sezione di lavoro atomica per l'ordine (transazione
 // SQLite BEGIN IMMEDIATE, vedi claim_processed_order). Un ordine già COMPLETO
 // (tutti gli sconti creati ed email inviata con successo) viene saltato — è
-// la vera idempotenza. Un ordine ancora "partial" (fallito parzialmente in un
-// tentativo precedente, o in corso da un'altra consegna concorrente dello
-// stesso webhook) viene ripreso da dove era rimasto: questo stesso meccanismo
-// è anche ciò che permette alla dashboard di "ritentare" un ordine fallito
-// semplicemente re-inviando lo stesso payload al webhook.
-$claim = claim_processed_order($order_id);
+// la vera idempotenza — a meno che non sia un order.updated (vedi sopra). Un
+// ordine ancora "partial" (fallito parzialmente in un tentativo precedente, o
+// in corso da un'altra consegna concorrente dello stesso webhook) viene
+// ripreso da dove era rimasto: questo stesso meccanismo è anche ciò che
+// permette alla dashboard di "ritentare" un ordine fallito semplicemente
+// re-inviando lo stesso payload al webhook.
+$claim = claim_processed_order($order_id, $action === 'order.updated');
 if ($claim['already_complete']) {
     write_log("Ordine $order_id già completato. Skip.");
     exit;
@@ -138,6 +146,8 @@ $attempted_targets = [];                 // target_id di tutte le regole che dov
 foreach ($eventi_acquistati as $e_id) {
     if (!isset($regole[$e_id])) continue;
     $r = $regole[$e_id];
+
+    if (($r['attiva'] ?? true) === false) continue; // regola disattivata dalla dashboard
 
     $qty_minima = max(1, (int)($r['qty_minima'] ?? 1));
     if (($qty_per_evento[$e_id] ?? 0) < $qty_minima) {
@@ -318,3 +328,4 @@ if ($is_complete) {
 }
 
 maybe_send_error_alert($conf);
+maybe_backup_database(); // no-op se già fatto nelle ultime 24h

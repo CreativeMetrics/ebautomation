@@ -74,6 +74,22 @@ function ensure_schema(PDO $pdo): void {
     $pdo->exec('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT, created_at INTEGER)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS throttle (key TEXT PRIMARY KEY, count INTEGER, first INTEGER)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS alert_state (id INTEGER PRIMARY KEY, last_ts INTEGER, last_count INTEGER)');
+
+    // Migrazioni additive su tabelle già esistenti (SQLite non supporta
+    // "ADD COLUMN IF NOT EXISTS", quindi controlliamo prima via PRAGMA).
+    add_column_if_missing($pdo, 'users', 'role', "TEXT NOT NULL DEFAULT 'admin'");
+}
+
+// NB: $table/$column/$definition vanno interpolati direttamente nell'SQL
+// (PDO non supporta il binding di nomi di tabella/colonna in PRAGMA/ALTER):
+// sicuro solo perché questa funzione va chiamata esclusivamente con
+// stringhe letterali scritte da noi in ensure_schema(), mai con input
+// dell'utente.
+function add_column_if_missing(PDO $pdo, string $table, string $column, string $definition): void {
+    $cols = $pdo->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    if (!in_array($column, $cols, true)) {
+        $pdo->exec("ALTER TABLE $table ADD COLUMN $column $definition");
+    }
 }
 
 /**
@@ -296,6 +312,44 @@ function make_config_backup(): void {
     make_backup(db()->query('SELECT key, value FROM config')->fetchAll(PDO::FETCH_KEY_PAIR), 'config');
 }
 
+/**
+ * Backup completo del database (non solo config/regole come make_backup):
+ * copre anche ordini processati, utenti, coda falliti. Al massimo una volta
+ * al giorno (controllo lazy sul file più recente, stesso pattern di
+ * rotate_logs — nessun vero cron necessario), ultimi 7 conservati.
+ * VACUUM INTO produce una copia consistente anche con WAL attivo, senza
+ * dover fermare le scritture.
+ */
+function maybe_backup_database(): void {
+    $dir = __DIR__ . '/backups';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+        file_put_contents($dir . '/.htaccess', "Deny from all\n");
+    }
+    $existing = glob($dir . '/database_*.sqlite') ?: [];
+    sort($existing);
+    $last = end($existing);
+    if ($last !== false && (time() - filemtime($last)) < 86400) return; // già un backup nelle ultime 24h
+
+    $dest = $dir . '/database_' . date('Ymd_His') . '.sqlite';
+    if (file_exists($dest)) {
+        // Collisione nello stesso secondo (es. due chiamate ravvicinate):
+        // VACUUM INTO fallisce se il file di destinazione esiste già, a
+        // differenza di copy() usata per gli altri backup.
+        $dest = $dir . '/database_' . date('Ymd_His') . '_' . substr(uniqid(), -6) . '.sqlite';
+    }
+    try {
+        db()->exec("VACUUM INTO '" . str_replace("'", "''", $dest) . "'");
+    } catch (Throwable $e) {
+        write_log('ERRORE backup database: ' . $e->getMessage());
+        return;
+    }
+    $files = glob($dir . '/database_*.sqlite') ?: [];
+    sort($files);
+    foreach (array_slice($files, 0, max(0, count($files) - 7)) as $old) unlink($old);
+    write_log('Backup completo del database creato: ' . basename($dest));
+}
+
 // ── REGOLE SCONTI ─────────────────────────────────────────────────────────────
 
 function load_regole(): array {
@@ -409,6 +463,22 @@ function send_security_headers(): void {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: same-origin');
+    // 'unsafe-inline' su script/style è necessario perché l'app usa
+    // attributi onclick="" e <style>/<script> inline senza un sistema di
+    // build che generi nonce — non protegge da uno script iniettato
+    // inline, ma blocca comunque il caso più comune di exfiltrazione via
+    // XSS: caricare risorse (script, immagini, richieste fetch) da un
+    // dominio esterno diverso da quelli esplicitamente permessi qui sotto.
+    header("Content-Security-Policy: default-src 'self'; "
+        . "script-src 'self' 'unsafe-inline'; "
+        . "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        . "font-src 'self' https://fonts.gstatic.com; "
+        . "img-src 'self' data:; "
+        . "connect-src 'self'; "
+        . "frame-src 'self'; "
+        . "form-action 'self'; "
+        . "base-uri 'self'; "
+        . "object-src 'none'");
 }
 
 // ── RATE LIMITING PER IP ────────────────────────────────────────────────────────
@@ -495,8 +565,8 @@ function resolve_event_org_id(string $event_id, string $api_token): ?string {
  * ricreare sconti né rimandare email già inviate. Pulisce anche gli ordini più
  * vecchi di 30 giorni.
  */
-function claim_processed_order(string $order_id): array {
-    return db_atomic(function (PDO $pdo) use ($order_id) {
+function claim_processed_order(string $order_id, bool $allow_reopen = false): array {
+    return db_atomic(function (PDO $pdo) use ($order_id, $allow_reopen) {
         $cutoff = time() - 30 * 86400;
         $pdo->prepare('DELETE FROM processed_orders WHERE ts < ? AND order_id != ?')->execute([$cutoff, $order_id]);
 
@@ -504,7 +574,12 @@ function claim_processed_order(string $order_id): array {
         $stmt->execute([$order_id]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if ($row && $row['status'] === 'complete') {
+        // $allow_reopen (usato per order.updated): riapre per rivalutazione
+        // anche un ordine già completo, es. se l'ordine è stato modificato
+        // dopo l'invio iniziale (quantità aumentata sopra una soglia
+        // qty_minima, nuovo evento aggiunto all'ordine). Non revoca mai
+        // sconti già creati: la pipeline a valle crea solo quelli mancanti.
+        if ($row && $row['status'] === 'complete' && !$allow_reopen) {
             return ['already_complete' => true, 'discounts' => [], 'email_sent_targets' => []];
         }
 
@@ -586,16 +661,23 @@ function load_failed_orders(): array {
 // ── UTENTI ────────────────────────────────────────────────────────────────────
 
 function load_users(): array {
-    $rows = db()->query('SELECT username, password_hash, created_at FROM users')->fetchAll(PDO::FETCH_ASSOC);
+    $rows = db()->query('SELECT username, password_hash, created_at, role FROM users')->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
-    foreach ($rows as $r) $out[$r['username']] = ['password_hash' => $r['password_hash'], 'created_at' => (int)$r['created_at']];
+    foreach ($rows as $r) {
+        $out[$r['username']] = ['password_hash' => $r['password_hash'], 'created_at' => (int)$r['created_at'], 'role' => $r['role'] ?: 'admin'];
+    }
     return $out;
 }
 
-/** Crea un nuovo utente (o lo sovrascrive se il nome esiste già). */
-function add_user_row(string $username, string $password_hash): void {
-    db()->prepare('INSERT OR REPLACE INTO users (username, password_hash, created_at) VALUES (?, ?, ?)')
-        ->execute([$username, $password_hash, time()]);
+/**
+ * Crea un nuovo utente (o lo sovrascrive se il nome esiste già).
+ * $role: 'admin' (accesso completo) o 'viewer' (sola lettura: può vedere
+ * dashboard/log/statistiche ma nessuna azione che modifica stato).
+ */
+function add_user_row(string $username, string $password_hash, string $role = 'admin'): void {
+    if (!in_array($role, ['admin', 'viewer'], true)) $role = 'admin';
+    db()->prepare('INSERT OR REPLACE INTO users (username, password_hash, created_at, role) VALUES (?, ?, ?, ?)')
+        ->execute([$username, $password_hash, time(), $role]);
 }
 
 /**
