@@ -1,0 +1,10 @@
+{
+    "1988842056128": {
+        "descrizione": "Test Event",
+        "percentuale": "100.00",
+        "codice_prefix": "GIFT",
+        "target_ids": [
+            "1988930419425"
+        ]
+    }
+}
