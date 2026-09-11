@@ -4,6 +4,8 @@ ini_set('display_errors', 1);
 
 require __DIR__ . '/functions.php';
 
+send_security_headers();
+
 if (session_status() === PHP_SESSION_NONE) session_start();
 if (empty($_SESSION['authenticated'])) {
     http_response_code(403);

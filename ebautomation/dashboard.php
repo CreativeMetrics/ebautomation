@@ -4,6 +4,8 @@ use PHPMailer\PHPMailer\Exception as MailException;
 
 require_once __DIR__ . '/functions.php';
 
+send_security_headers();
+
 if (session_status() === PHP_SESSION_NONE) {
     $is_https = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     ini_set('session.cookie_httponly', 1);
@@ -43,15 +45,19 @@ if (empty($conf['dashboard_password'])) {
 if (empty($_SESSION['authenticated'])) {
     $login_error = $login_blocked = false;
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login') {
+        // Throttling per IP oltre a quello di sessione: quest'ultimo da solo
+        // è aggirabile non inviando il cookie di sessione ad ogni tentativo.
+        $ip_key       = 'login:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
         $attempts     = (int)($_SESSION['login_attempts']     ?? 0);
         $last_attempt = (int)($_SESSION['login_last_attempt'] ?? 0);
         if (time() - $last_attempt > 900) $attempts = 0;
-        if ($attempts >= 5) {
+        if ($attempts >= 5 || !throttle_allowed($ip_key, 5, 900)) {
             $login_blocked = $login_error = true;
         } elseif (!verify_csrf()) {
             $login_error = true;
         } elseif (password_verify($_POST['password'] ?? '', $conf['dashboard_password'])) {
             unset($_SESSION['login_attempts'], $_SESSION['login_last_attempt']);
+            throttle_reset($ip_key);
             $_SESSION['authenticated'] = true;
             session_regenerate_id(true);
             header('Location: dashboard.php');
@@ -59,6 +65,7 @@ if (empty($_SESSION['authenticated'])) {
         } else {
             $_SESSION['login_attempts']     = $attempts + 1;
             $_SESSION['login_last_attempt'] = time();
+            throttle_hit($ip_key, 900);
             $login_error = true;
         }
     }

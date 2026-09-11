@@ -1,0 +1,14 @@
+# Dati di runtime e configurazione sensibile: non vanno versionati.
+# config.json contiene in chiaro token API Eventbrite, credenziali SMTP
+# e l'hash della password dashboard; gli altri file sono stato
+# generato/modificato dall'app a runtime, non codice sorgente.
+config.json
+logo.png
+webhook_log.txt
+webhook_log_*.txt
+processed_orders.json
+regole_sconti.json
+login_throttle.json
+trigger_events.txt
+target_events.txt
+backups/

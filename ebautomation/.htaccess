@@ -1,0 +1,19 @@
+# Blocca l'accesso diretto via browser ai file di dati e configurazione.
+# Questi file devono restare leggibili solo dagli script PHP dell'app
+# (file_get_contents non passa dal webserver, quindi non è influenzato
+# da queste regole), non scaricabili da chiunque conosca l'URL.
+# Copre: config.json (token API, password SMTP, hash password dashboard),
+# regole_sconti.json, processed_orders.json, login_throttle.json,
+# webhook_log.txt e i suoi archivi mensili, trigger_events.txt/target_events.txt.
+<FilesMatch "\.(json|txt)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Le cartelle backups/ (dump periodici di regole_sconti.json) e PHPMailer/
+# hanno un proprio .htaccess/non necessitano di esecuzione PHP diretta.

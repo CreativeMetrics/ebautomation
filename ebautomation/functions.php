@@ -1,7 +1,8 @@
 <?php
-define('CONFIG_FILE', __DIR__ . '/config.json');
-define('REGOLE_FILE', __DIR__ . '/regole_sconti.json');
-define('LOG_FILE',    __DIR__ . '/webhook_log.txt');
+define('CONFIG_FILE',    __DIR__ . '/config.json');
+define('REGOLE_FILE',    __DIR__ . '/regole_sconti.json');
+define('LOG_FILE',       __DIR__ . '/webhook_log.txt');
+define('THROTTLE_FILE',  __DIR__ . '/login_throttle.json');
 
 function load_config(): array {
     $defaults = [
@@ -89,4 +90,70 @@ function verify_csrf(): bool {
     if (session_status() === PHP_SESSION_NONE) session_start();
     $t = $_POST['csrf_token'] ?? '';
     return !empty($_SESSION['csrf']) && hash_equals($_SESSION['csrf'], $t);
+}
+
+/**
+ * Invia header di hardening di base. Da chiamare prima di qualsiasi output HTML.
+ */
+function send_security_headers(): void {
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('Referrer-Policy: same-origin');
+}
+
+/**
+ * Legge, modifica e riscrive un file JSON in una singola sezione critica
+ * protetta da flock, per evitare race condition read-modify-write tra
+ * richieste concorrenti (es. webhook duplicati inviati da Eventbrite).
+ * $mutator riceve l'array decodificato (o [] se il file è vuoto/assente)
+ * e deve restituire l'array da salvare.
+ */
+function atomic_json_update(string $file, callable $mutator): array {
+    $fp = fopen($file, 'c+');
+    if (!$fp) return [];
+    flock($fp, LOCK_EX);
+    $size = filesize($file) ?: 0;
+    $raw  = $size > 0 ? fread($fp, $size) : '';
+    $data = $raw !== '' ? (json_decode($raw, true) ?: []) : [];
+    $data = $mutator($data);
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode($data));
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+    return $data;
+}
+
+/**
+ * Rate limiting per IP (indipendente dalla sessione/cookie), a complemento
+ * del throttling basato su sessione: quest'ultimo da solo è aggirabile
+ * semplicemente non inviando il cookie di sessione.
+ */
+function throttle_allowed(string $key, int $max, int $window): bool {
+    $data  = file_exists(THROTTLE_FILE) ? (json_decode(file_get_contents(THROTTLE_FILE), true) ?: []) : [];
+    $entry = $data[$key] ?? null;
+    if (!$entry || (time() - $entry['first']) > $window) return true;
+    return $entry['count'] < $max;
+}
+
+function throttle_hit(string $key, int $window): void {
+    atomic_json_update(THROTTLE_FILE, function (array $data) use ($key, $window) {
+        foreach ($data as $k => $v) {
+            if ((time() - $v['first']) > $window) unset($data[$k]);
+        }
+        $entry = $data[$key] ?? ['count' => 0, 'first' => time()];
+        if ((time() - $entry['first']) > $window) $entry = ['count' => 0, 'first' => time()];
+        $entry['count']++;
+        $data[$key] = $entry;
+        return $data;
+    });
+}
+
+function throttle_reset(string $key): void {
+    if (!file_exists(THROTTLE_FILE)) return;
+    atomic_json_update(THROTTLE_FILE, function (array $data) use ($key) {
+        unset($data[$key]);
+        return $data;
+    });
 }

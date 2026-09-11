@@ -15,8 +15,8 @@ if ($conf['paused']) {
     exit;
 }
 
-// 1. Verifica token webhook
-if (!empty($conf['webhook_token']) && ($_GET['token'] ?? '') !== $conf['webhook_token']) {
+// 1. Verifica token webhook (confronto a tempo costante)
+if (!empty($conf['webhook_token']) && !hash_equals($conf['webhook_token'], (string)($_GET['token'] ?? ''))) {
     http_response_code(403);
     exit;
 }
@@ -105,14 +105,28 @@ if ($action === 'order.refunded') {
 // ── ACQUISTO ─────────────────────────────────────────────────────────────────
 if ($action !== 'order.placed') exit; // ignora altri tipi di evento
 
-if (isset($processed[$order_id])) {
+// Verifica e marca come "in elaborazione" in un'unica sezione atomica
+// (protetta da flock) per evitare che due consegne concorrenti dello
+// stesso webhook (Eventbrite può inviare retry) superino entrambe il
+// controllo di idempotenza e creino sconti/email duplicati.
+$already_processed = false;
+$cutoff = time() - 30 * 86400;
+atomic_json_update($processed_file, function (array $data) use ($order_id, $cutoff, &$already_processed) {
+    $data = array_filter($data, function ($v) use ($cutoff) {
+        return (is_array($v) ? ($v['ts'] ?? 0) : (int)$v) > $cutoff;
+    });
+    if (isset($data[$order_id])) {
+        $already_processed = true;
+        return $data;
+    }
+    $data[$order_id] = ['ts' => time(), 'discount_ids' => []];
+    return $data;
+});
+
+if ($already_processed) {
     write_log("Ordine $order_id già processato. Skip.");
     exit;
 }
-
-// Marca subito per idempotenza (prima di elaborare)
-$processed[$order_id] = ['ts' => time(), 'discount_ids' => []];
-file_put_contents($processed_file, json_encode($processed), LOCK_EX);
 
 if (!isset($order['attendees'])) {
     write_log("Ordine $order_id senza attendees. HTTP: $http_code");
@@ -185,12 +199,13 @@ foreach ($eventi_acquistati as $e_id) {
     }
 }
 
-// Aggiorna i discount ID tracciati (rilegge il file per sicurezza)
-$proc_current = json_decode(file_get_contents($processed_file), true) ?: [];
-if (isset($proc_current[$order_id]) && is_array($proc_current[$order_id])) {
-    $proc_current[$order_id]['discount_ids'] = $created_disc_ids;
-    file_put_contents($processed_file, json_encode($proc_current), LOCK_EX);
-}
+// Aggiorna i discount ID tracciati
+atomic_json_update($processed_file, function (array $data) use ($order_id, $created_disc_ids) {
+    if (isset($data[$order_id]) && is_array($data[$order_id])) {
+        $data[$order_id]['discount_ids'] = $created_disc_ids;
+    }
+    return $data;
+});
 
 // 5. Invio email
 if (empty($regali_finali)) exit;

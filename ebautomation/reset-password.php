@@ -6,8 +6,13 @@
  */
 require __DIR__ . '/functions.php';
 
+send_security_headers();
+
 if (session_status() === PHP_SESSION_NONE) {
+    $is_https = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     ini_set('session.cookie_httponly', 1);
+    ini_set('session.cookie_secure',   $is_https ? 1 : 0);
+    ini_set('session.cookie_samesite', 'Strict');
     session_start();
 }
 
@@ -21,12 +26,14 @@ if (empty($conf['api_token'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Rate limiting: max 3 tentativi in 15 minuti
+    // Rate limiting: max 3 tentativi in 15 minuti, per sessione E per IP
+    // (il solo limite di sessione è aggirabile non inviando il cookie).
+    $ip_key       = 'reset:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
     $attempts     = (int)($_SESSION['rp_attempts']     ?? 0);
     $last_attempt = (int)($_SESSION['rp_last_attempt'] ?? 0);
     if (time() - $last_attempt > 900) $attempts = 0;
 
-    if ($attempts >= 3) {
+    if ($attempts >= 3 || !throttle_allowed($ip_key, 3, 900)) {
         $error = 'Troppi tentativi falliti. Riprova tra 15 minuti.';
     } else {
         $api_token = trim($_POST['api_token']        ?? '');
@@ -36,6 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!hash_equals($conf['api_token'], $api_token)) {
             $_SESSION['rp_attempts']     = $attempts + 1;
             $_SESSION['rp_last_attempt'] = time();
+            throttle_hit($ip_key, 900);
             $error = 'Private Token API non corretto. Trovi il token nel pannello Eventbrite → API Keys.';
         } elseif (mb_strlen($new_pwd) < 8) {
             $error = 'La password deve essere di almeno 8 caratteri.';
@@ -45,6 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $conf['dashboard_password'] = password_hash($new_pwd, PASSWORD_DEFAULT);
             save_config($conf);
             unset($_SESSION['rp_attempts'], $_SESSION['rp_last_attempt']);
+            throttle_reset($ip_key);
             $success = true;
         }
     }
