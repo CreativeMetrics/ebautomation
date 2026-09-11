@@ -27,8 +27,11 @@ if (!$input || !isset($input['api_url'])) {
     exit;
 }
 
-// Protezione SSRF
-if (!str_starts_with($input['api_url'], 'https://www.eventbriteapi.com/')) {
+// Protezione SSRF: accetta solo l'esatto endpoint "ordine" di Eventbrite
+// (non un generico prefisso di dominio), così il webhook non può essere
+// usato come oracolo per interrogare, col nostro token, qualunque altro
+// endpoint dell'API Eventbrite.
+if (!preg_match('#^https://www\.eventbriteapi\.com/v3/orders/\d+/$#', $input['api_url'])) {
     write_log('api_url non autorizzata: ' . $input['api_url']);
     http_response_code(400);
     exit;

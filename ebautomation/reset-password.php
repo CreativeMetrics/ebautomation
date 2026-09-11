@@ -45,8 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['rp_last_attempt'] = time();
             throttle_hit($ip_key, 900);
             $error = 'Private Token API non corretto. Trovi il token nel pannello Eventbrite → API Keys.';
-        } elseif (mb_strlen($new_pwd) < 8) {
-            $error = 'La password deve essere di almeno 8 caratteri.';
+        } elseif ($issue = password_issue($new_pwd)) {
+            $error = $issue;
         } elseif ($new_pwd !== $confirm) {
             $error = 'Le password non coincidono.';
         } else {
@@ -109,7 +109,7 @@ $brand = htmlspecialchars($conf['business_name'] ?: 'Dashboard', ENT_QUOTES, 'UT
             <input type="password" name="api_token" placeholder="Incolla il token" required autocomplete="new-password">
 
             <label>Nuova Password Dashboard</label>
-            <input type="password" name="new_password" placeholder="Minimo 8 caratteri" required autocomplete="new-password">
+            <input type="password" name="new_password" placeholder="Minimo 10 caratteri" required autocomplete="new-password">
 
             <label>Conferma Nuova Password</label>
             <input type="password" name="confirm_password" placeholder="Ripeti la password" required autocomplete="new-password">

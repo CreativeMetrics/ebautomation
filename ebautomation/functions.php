@@ -3,6 +3,44 @@ define('CONFIG_FILE',    __DIR__ . '/config.json');
 define('REGOLE_FILE',    __DIR__ . '/regole_sconti.json');
 define('LOG_FILE',       __DIR__ . '/webhook_log.txt');
 define('THROTTLE_FILE',  __DIR__ . '/login_throttle.json');
+define('SECRET_KEY_FILE', __DIR__ . '/secret.php');
+
+/**
+ * Chiave di cifratura per i segreti salvati in config.json (api_token,
+ * smtp_pass). Viene generata una sola volta e conservata in un file .php:
+ * essendo eseguito dal webserver come codice (non produce output), non è
+ * mai scaricabile come testo — a differenza di un .json/.txt, la cui
+ * protezione dipende dal fatto che .htaccess sia effettivamente applicato
+ * dal webserver in uso.
+ */
+function get_secret_key(): string {
+    if (!file_exists(SECRET_KEY_FILE)) {
+        $key = base64_encode(random_bytes(SODIUM_CRYPTO_SECRETBOX_KEYBYTES));
+        file_put_contents(SECRET_KEY_FILE, "<?php\nreturn '" . $key . "';\n", LOCK_EX);
+        @chmod(SECRET_KEY_FILE, 0600);
+    }
+    return base64_decode((string) require SECRET_KEY_FILE);
+}
+
+function encrypt_secret(string $plain): string {
+    if ($plain === '') return '';
+    $key   = get_secret_key();
+    $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $ct    = sodium_crypto_secretbox($plain, $nonce, $key);
+    return 'enc:v1:' . base64_encode($nonce . $ct);
+}
+
+function decrypt_secret(string $value): string {
+    if ($value === '' || !str_starts_with($value, 'enc:v1:')) {
+        return $value; // valore in chiaro (config legacy non ancora migrata) o vuoto
+    }
+    $raw = base64_decode(substr($value, 7));
+    if ($raw === false || strlen($raw) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) return '';
+    $nonce  = substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $ct     = substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $plain  = sodium_crypto_secretbox_open($ct, $nonce, get_secret_key());
+    return $plain !== false ? $plain : '';
+}
 
 function load_config(): array {
     $defaults = [
@@ -25,11 +63,46 @@ function load_config(): array {
     ];
     if (!file_exists(CONFIG_FILE)) return $defaults;
     $data = json_decode(file_get_contents(CONFIG_FILE), true);
-    return array_merge($defaults, (array)$data);
+    $conf = array_merge($defaults, (array)$data);
+    // api_token e smtp_pass sono cifrati a riposo (vedi save_config);
+    // decrypt_secret restituisce il valore invariato se non è cifrato,
+    // quindi una config esistente in chiaro continua a funzionare e
+    // viene migrata automaticamente al primo save_config().
+    $conf['api_token'] = decrypt_secret((string)$conf['api_token']);
+    $conf['smtp_pass'] = decrypt_secret((string)$conf['smtp_pass']);
+    return $conf;
 }
 
 function save_config(array $config): void {
+    if (isset($config['api_token'])) $config['api_token'] = encrypt_secret((string)$config['api_token']);
+    if (isset($config['smtp_pass'])) $config['smtp_pass'] = encrypt_secret((string)$config['smtp_pass']);
     file_put_contents(CONFIG_FILE, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+/**
+ * Valida la robustezza di una nuova password, restituendo il messaggio
+ * d'errore da mostrare oppure null se la password è accettabile.
+ * Segue l'approccio NIST 800-63B: si privilegia la lunghezza rispetto a
+ * regole di complessità arbitrarie (maiuscole/simboli obbligatori), che
+ * spingono verso pattern prevedibili senza aumentare davvero la sicurezza;
+ * si blocca invece un piccolo elenco di password banali/prevedibili.
+ */
+function password_issue(string $pwd): ?string {
+    if (mb_strlen($pwd) < 10) {
+        return 'La password deve essere di almeno 10 caratteri.';
+    }
+    static $common = [
+        'password', 'password1', 'password123', '12345678', '123456789',
+        '1234567890', 'qwertyuiop', 'letmein123', 'admin12345', 'welcome123',
+        'iloveyou12', 'changeme123', 'dashboard1', 'abcdefghij', 'eventbrite',
+    ];
+    if (in_array(mb_strtolower($pwd), $common, true)) {
+        return 'Questa password è troppo comune e facilmente indovinabile. Scegline una più originale.';
+    }
+    if (preg_match('/^\d+$/', $pwd)) {
+        return 'La password non può contenere solo cifre.';
+    }
+    return null;
 }
 
 function make_regole_backup(): void {

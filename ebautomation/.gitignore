@@ -3,6 +3,7 @@
 # e l'hash della password dashboard; gli altri file sono stato
 # generato/modificato dall'app a runtime, non codice sorgente.
 config.json
+secret.php
 logo.png
 webhook_log.txt
 webhook_log_*.txt

@@ -25,8 +25,8 @@ if (empty($conf['dashboard_password'])) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'setup' && verify_csrf()) {
         $pwd   = $_POST['new_password'] ?? '';
         $bname = trim($_POST['business_name'] ?? '');
-        if (mb_strlen($pwd) < 8) {
-            $setup_error = 'La password deve essere di almeno 8 caratteri.';
+        if ($issue = password_issue($pwd)) {
+            $setup_error = $issue;
         } else {
             $conf['business_name']      = $bname ?: ($conf['business_name'] ?: 'La nostra Azienda');
             $conf['dashboard_password'] = password_hash($pwd, PASSWORD_DEFAULT);
@@ -120,8 +120,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'email_color'     => $color,
             ]);
             if ($new_pwd !== '') {
-                if (mb_strlen($new_pwd) < 8) {
-                    $_SESSION['flash_error'] = 'La password deve essere di almeno 8 caratteri.';
+                if ($issue = password_issue($new_pwd)) {
+                    $_SESSION['flash_error'] = $issue;
                     header('Location: dashboard.php?tab=config');
                     exit;
                 }
@@ -717,7 +717,7 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
             <div class="grid">
                 <div class="input-group">
                     <label>Nuova Password (lascia vuoto per non cambiare)</label>
-                    <input type="password" name="new_password" placeholder="Minimo 8 caratteri" autocomplete="new-password">
+                    <input type="password" name="new_password" placeholder="Minimo 10 caratteri" autocomplete="new-password">
                 </div>
             </div>
             <button type="submit">Salva Configurazione</button>
@@ -1212,7 +1212,7 @@ function render_setup(array $conf, string $csrf, string $error): void {
         <input type="hidden" name="action" value="setup">
         <input type="hidden" name="csrf_token" value="{$csrf}">
         <label>Nome Azienda</label><input type="text" name="business_name" value="{$bname}" placeholder="Es. Mia Azienda Srl" required>
-        <label>Password Dashboard (min. 8 caratteri)</label><input type="password" name="new_password" placeholder="Scegli una password sicura" required autocomplete="new-password">
+        <label>Password Dashboard (min. 10 caratteri)</label><input type="password" name="new_password" placeholder="Scegli una password sicura" required autocomplete="new-password">
         <button type="submit">Configura e Accedi</button>
     </form></div></body></html>
 HTML;
