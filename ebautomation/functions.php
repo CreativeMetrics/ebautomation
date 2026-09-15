@@ -60,6 +60,7 @@ function db(): PDO {
     $pdo->exec('PRAGMA foreign_keys = ON');
     ensure_schema($pdo);
     migrate_legacy_json_if_needed($pdo);
+    migrate_email_templates_if_needed($pdo);
     return $pdo;
 }
 
@@ -74,6 +75,9 @@ function ensure_schema(PDO $pdo): void {
     $pdo->exec('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT, created_at INTEGER)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS throttle (key TEXT PRIMARY KEY, count INTEGER, first INTEGER)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS alert_state (id INTEGER PRIMARY KEY, last_ts INTEGER, last_count INTEGER)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS email_templates (
+        lingua TEXT PRIMARY KEY, nome TEXT, subject TEXT, colore TEXT, body_html TEXT, item_html TEXT, is_default INTEGER DEFAULT 0
+    )');
 
     // Migrazioni additive su tabelle già esistenti (SQLite non supporta
     // "ADD COLUMN IF NOT EXISTS", quindi controlliamo prima via PRAGMA).
@@ -209,6 +213,51 @@ function migrate_legacy_json_if_needed(PDO $pdo): void {
         $pdo->exec('ROLLBACK');
         write_log('ERRORE migrazione JSON->SQLite: ' . $e->getMessage());
     }
+}
+
+/**
+ * Se non esiste ancora nessun template email, ne crea uno "Italiano"
+ * predefinito ereditando i vecchi campi a singolo valore
+ * (email_subject/email_intro/email_greeting/email_color) con la stessa
+ * struttura HTML usata finora: chi aveva già personalizzato oggetto/saluto/
+ * intro/colore li ritrova identici nel nuovo sistema multi-template, non
+ * deve ricrearli da zero. I vecchi campi restano nella tabella config come
+ * dato inerte (non più letti altrove) per non introdurre altre migrazioni.
+ */
+function migrate_email_templates_if_needed(PDO $pdo): void {
+    static $checked = false;
+    if ($checked) return;
+    $checked = true;
+
+    $count = (int)$pdo->query('SELECT COUNT(*) FROM email_templates')->fetchColumn();
+    if ($count > 0) return;
+
+    $rows = $pdo->query("SELECT key, value FROM config WHERE key IN ('email_subject','email_intro','email_greeting','email_color')")
+        ->fetchAll(PDO::FETCH_KEY_PAIR);
+
+    $subject  = ($rows['email_subject']  ?? '') ?: 'I tuoi regali da {{business_name}}';
+    $greeting = ($rows['email_greeting'] ?? '') ?: 'Ciao {{nome}}!'; // contiene già il segnaposto {{nome}}
+    $intro    = ($rows['email_intro']    ?? '') ?: 'Grazie per i tuoi acquisti. Ecco i regali che abbiamo riservato per te:';
+    $colore   = ($rows['email_color']    ?? '') ?: '#D64545';
+
+    $body_html = '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #eee;">'
+        . '<div style="text-align:center;">{{logo}}</div>'
+        . '<h2 style="color:#2d3142;text-align:center;">' . h($greeting) . '</h2>'
+        . '<p style="text-align:center;color:#4f5d75;">' . h($intro) . '</p>'
+        . '{{items}}'
+        . '<p style="font-size:11px;color:#aaa;text-align:center;margin-top:30px;">&copy; {{anno}} {{business_name}}</p>'
+        . '</div>';
+
+    $item_html = '<div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;margin-bottom:15px;border-radius:8px;text-align:center;">'
+        . '<p style="color:#666;font-size:13px;margin:0;">Per l\'evento: <b>{{desc}}</b></p>'
+        . '<p style="color:{{colore}};font-size:24px;font-weight:bold;margin:10px 0;">{{code}}</p>'
+        . '<a href="{{url}}" style="display:inline-block;background:{{colore}};color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Usa Sconto {{label}}</a>'
+        . '</div>';
+
+    $pdo->prepare('INSERT INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default) VALUES (?,?,?,?,?,?,1)')
+        ->execute(['it', 'Italiano', $subject, $colore, $body_html, $item_html]);
+
+    write_log('Creato template email "Italiano" (migrazione automatica dai campi precedenti).');
 }
 
 // ── CONFIGURAZIONE ────────────────────────────────────────────────────────────
@@ -377,6 +426,109 @@ function replace_all_regole(array $regole): void {
         $stmt = $pdo->prepare('INSERT INTO regole (trigger_id, data) VALUES (?, ?)');
         foreach ($regole as $tid => $rule) $stmt->execute([(string)$tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
     });
+}
+
+// ── TEMPLATE EMAIL ────────────────────────────────────────────────────────────
+// Più lingue/varianti visive possibili: ogni regola sceglie quale usare
+// (campo "lingua" nella regola), con una predefinita per chi non specifica
+// nulla. Ogni template è HTML libero con segnaposto, non solo testo fisso.
+
+function load_email_templates(): array {
+    $rows = db()->query('SELECT lingua, nome, subject, colore, body_html, item_html, is_default FROM email_templates ORDER BY lingua')->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[$r['lingua']] = [
+            'nome'       => $r['nome'],
+            'subject'    => $r['subject'],
+            'colore'     => $r['colore'],
+            'body_html'  => $r['body_html'],
+            'item_html'  => $r['item_html'],
+            'is_default' => (bool)$r['is_default'],
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Salva un template email (crea o sovrascrive). Se marcato come
+ * predefinito, toglie il flag a tutti gli altri: ce n'è sempre al più uno.
+ */
+function save_email_template(string $lingua, array $tpl): void {
+    db_atomic(function (PDO $pdo) use ($lingua, $tpl) {
+        if (!empty($tpl['is_default'])) {
+            $pdo->exec('UPDATE email_templates SET is_default = 0');
+        }
+        $pdo->prepare('INSERT OR REPLACE INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default) VALUES (?,?,?,?,?,?,?)')
+            ->execute([$lingua, $tpl['nome'], $tpl['subject'], $tpl['colore'], $tpl['body_html'], $tpl['item_html'], !empty($tpl['is_default']) ? 1 : 0]);
+    });
+}
+
+function delete_email_template(string $lingua): void {
+    db()->prepare('DELETE FROM email_templates WHERE lingua = ?')->execute([$lingua]);
+}
+
+/**
+ * Il template da usare: quello con la lingua indicata se esiste, altrimenti
+ * il predefinito, altrimenti il primo disponibile — non lascia mai un
+ * ordine senza email per una configurazione incompleta (lingua di una
+ * regola cancellata, nessun predefinito impostato, ecc.).
+ */
+function get_email_template(?string $lingua): ?array {
+    $templates = load_email_templates();
+    if ($lingua && isset($templates[$lingua])) return $templates[$lingua];
+    foreach ($templates as $t) {
+        if ($t['is_default']) return $t;
+    }
+    return $templates ? reset($templates) : null;
+}
+
+/**
+ * Sostituisce i segnaposto di un template con i dati reali dell'ordine,
+ * producendo oggetto/HTML/testo semplice pronti per PHPMailer. Condivisa
+ * tra invio reale (webhook) e anteprima/test dalla dashboard, così
+ * l'anteprima mostra SEMPRE esattamente quello che verrebbe inviato.
+ *
+ * Segnaposto nel corpo: {{business_name}} {{nome}} {{items}} {{anno}} {{logo}} {{colore}}
+ * Segnaposto per singolo sconto (item_html, concatenati in {{items}}):
+ * {{desc}} {{code}} {{url}} {{label}} {{colore}}
+ */
+function render_email_template(array $template, string $business_name, string $nome_cliente, array $regali_finali, bool $has_logo): array {
+    $colore = $template['colore'] ?: '#D64545';
+
+    $items_html = '';
+    foreach ($regali_finali as $reg) {
+        $items_html .= strtr((string)($template['item_html'] ?? ''), [
+            '{{desc}}'   => h($reg['desc']),
+            '{{code}}'   => h($reg['code']),
+            '{{url}}'    => h($reg['url']),
+            '{{label}}'  => h($reg['label']),
+            '{{colore}}' => h($colore),
+        ]);
+    }
+
+    $logo_html = $has_logo
+        ? '<img src="cid:logo_cid" style="max-width:150px;margin-bottom:20px;">'
+        : '<h1 style="color:#2d3142;">' . h($business_name) . '</h1>';
+
+    $html = strtr((string)($template['body_html'] ?? ''), [
+        '{{business_name}}' => h($business_name),
+        '{{nome}}'           => h($nome_cliente),
+        '{{items}}'          => $items_html,
+        '{{anno}}'            => date('Y'),
+        '{{logo}}'            => $logo_html,
+        '{{colore}}'          => h($colore),
+    ]);
+
+    // L'oggetto va in un header email, non in HTML: nessun h() qui.
+    $subject = strtr((string)($template['subject'] ?? ''), ['{{business_name}}' => $business_name]);
+    $text    = trim(preg_replace('/\s+/', ' ', strip_tags($html)));
+
+    return ['subject' => $subject, 'html' => $html, 'text' => $text];
+}
+
+/** Sconti di esempio per anteprima/test di un template, senza un ordine reale. */
+function sample_regali_finali(): array {
+    return [['desc' => 'Evento di Esempio', 'code' => 'GIFT-PREVIEW', 'url' => '#', 'label' => '100%']];
 }
 
 // ── LOG ───────────────────────────────────────────────────────────────────────

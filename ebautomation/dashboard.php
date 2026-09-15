@@ -128,7 +128,7 @@ if (($_GET['action'] ?? '') === 'export_regole_csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="regole_sconti_' . date('Y-m-d') . '.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva']);
+    fputcsv($out, ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua']);
     foreach (load_regole() as $tid => $r) {
         fputcsv($out, [
             $tid,
@@ -142,6 +142,7 @@ if (($_GET['action'] ?? '') === 'export_regole_csv') {
             $r['giorni_scadenza'] ?? 0,
             $r['qty_minima'] ?? 1,
             ($r['attiva'] ?? true) ? '1' : '0',
+            $r['lingua'] ?? '',
         ]);
     }
     fclose($out);
@@ -170,6 +171,23 @@ if (($_GET['action'] ?? '') === 'health') {
     exit;
 }
 
+// ── ANTEPRIMA TEMPLATE EMAIL ─────────────────────────────────────────────────
+// Sola lettura (accessibile anche ai "viewer"): mostra esattamente l'HTML che
+// verrebbe inviato, con dati di esempio, usando lo stesso motore di rendering
+// dell'invio reale — nessuna ricostruzione lato JS da tenere sincronizzata.
+if (($_GET['action'] ?? '') === 'preview_email_template') {
+    $preview_template = get_email_template(trim($_GET['lingua'] ?? '') ?: null);
+    header('Content-Type: text/html; charset=utf-8');
+    if (!$preview_template) {
+        echo '<p style="font-family:sans-serif;padding:40px;">Nessun template disponibile.</p>';
+        exit;
+    }
+    $preview_logo = file_exists(__DIR__ . '/logo.png');
+    $preview = render_email_template($preview_template, $conf['business_name'] ?: 'La nostra Azienda', 'Mario', sample_regali_finali(), $preview_logo);
+    echo $preview['html'];
+    exit;
+}
+
 // ── AZIONI POST ───────────────────────────────────────────────────────────────
 $flash_error = $_SESSION['flash_error'] ?? '';
 $flash_ok    = $_SESSION['flash_ok']    ?? '';
@@ -192,7 +210,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case 'save_config':
             $enc     = in_array($_POST['smtp_encryption'] ?? '', ['smtps','tls']) ? $_POST['smtp_encryption'] : $conf['smtp_encryption'];
-            $color   = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['email_color'] ?? '') ? $_POST['email_color'] : $conf['email_color'];
             $updated = array_merge($conf, [
                 'business_name'   => trim($_POST['business_name']   ?? $conf['business_name']),
                 'api_token'       => trim($_POST['api_token']       ?? $conf['api_token']),
@@ -203,10 +220,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'smtp_port'       => trim($_POST['smtp_port']       ?? $conf['smtp_port']),
                 'smtp_encryption' => $enc,
                 'currency'        => strtoupper(substr(preg_replace('/[^A-Z]/i', '', $_POST['currency'] ?? $conf['currency']), 0, 3)),
-                'email_subject'   => trim($_POST['email_subject']   ?? $conf['email_subject']),
-                'email_intro'     => trim($_POST['email_intro']     ?? $conf['email_intro']),
-                'email_greeting'  => trim($_POST['email_greeting']  ?? $conf['email_greeting']),
-                'email_color'     => $color,
                 'alert_email'     => trim($_POST['alert_email']     ?? $conf['alert_email']),
                 'alert_threshold' => max(1, (int)($_POST['alert_threshold'] ?? $conf['alert_threshold'])),
             ]);
@@ -302,6 +315,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
 
         case 'test_smtp':
+            // Verifica pura della connessione SMTP: messaggio minimo fisso,
+            // indipendente dai template (che si testano singolarmente nella
+            // sezione "Template Email", con dati e visual reali).
             $to = trim($_POST['test_email'] ?? $conf['smtp_user']);
             if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
                 $_SESSION['flash_error'] = 'Indirizzo email non valido.';
@@ -313,12 +329,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             require_once __DIR__ . '/PHPMailer/SMTP.php';
             $mail = new Mailer(true);
             try {
-                $bname_t   = $conf['business_name'] ?: 'La nostra Azienda';
-                $subject_t = str_replace('{{business_name}}', $bname_t, $conf['email_subject'] ?: "I tuoi regali da $bname_t");
-                $greeting_t = str_replace('{{nome}}', 'Cliente', $conf['email_greeting'] ?: 'Ciao {{nome}}!');
-                $intro_t   = $conf['email_intro']   ?: 'Grazie per i tuoi acquisti. Ecco i regali che abbiamo riservato per te:';
-                $color_t   = $conf['email_color']   ?: '#D64545';
-
+                $bname_t = $conf['business_name'] ?: 'La nostra Azienda';
                 $mail->isSMTP();
                 $mail->Host       = $conf['smtp_host'];
                 $mail->SMTPAuth   = true;
@@ -329,87 +340,105 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mail->CharSet    = 'UTF-8';
                 $mail->setFrom($conf['smtp_user'], $bname_t);
                 $mail->addAddress($to);
-                $mail->Subject = '[TEST] ' . $subject_t;
-                $mail->isHTML(true);
-
-                $logo_path = __DIR__ . '/logo.png';
-                $logo_html = file_exists($logo_path) ? '' : '<h1 style="color:#2d3142;">' . h($bname_t) . '</h1>';
-                if (file_exists($logo_path)) {
-                    $mail->addEmbeddedImage($logo_path, 'logo_cid');
-                    $logo_html = '<img src="cid:logo_cid" style="max-width:150px;margin-bottom:20px;">';
-                }
-
-                $mail->Body = '
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #eee;">
-                    <div style="text-align:center;">' . $logo_html . '</div>
-                    <h2 style="color:#2d3142;text-align:center;">' . h($greeting_t) . '</h2>
-                    <p style="text-align:center;color:#4f5d75;">' . h($intro_t) . '</p>
-                    <div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;margin-bottom:15px;border-radius:8px;text-align:center;">
-                        <p style="color:#666;font-size:13px;margin:0;">Per l\'evento: <b>Evento di Esempio</b></p>
-                        <p style="color:' . h($color_t) . ';font-size:24px;font-weight:bold;margin:10px 0;">GIFT-PREVIEW</p>
-                        <a href="#" style="display:inline-block;background:' . h($color_t) . ';color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Usa Sconto 100%</a>
-                    </div>
-                    <p style="font-size:11px;color:#aaa;text-align:center;margin-top:30px;">&copy; ' . date('Y') . ' ' . h($bname_t) . '</p>
-                </div>';
-                $mail->AltBody = "$greeting_t $intro_t (Codice di esempio: GIFT-PREVIEW)";
+                $mail->Subject = "[TEST] Connessione SMTP — $bname_t";
+                $mail->isHTML(false);
+                $mail->Body = "Questa è un'email di test per verificare che le credenziali SMTP configurate funzionino.\n\nSe la ricevi, la connessione è corretta.";
                 $mail->send();
-                $_SESSION['flash_ok'] = "Email di test inviata a $to con il template attuale.";
+                $_SESSION['flash_ok'] = "Email di test inviata a $to.";
             } catch (MailException $e) {
                 $_SESSION['flash_error'] = 'Errore SMTP: ' . $mail->ErrorInfo;
             }
             header('Location: dashboard.php?tab=config');
             exit;
 
-        case 'test_smtp_preview':
-            $is_json  = ($_POST['_format'] ?? '') === 'json';
-            $to       = trim($_POST['preview_test_email'] ?? $conf['smtp_user']);
-            if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
-                $err = 'Indirizzo email non valido.';
-                if ($is_json) { header('Content-Type: application/json'); echo json_encode(['ok' => false, 'msg' => $err]); exit; }
-                $_SESSION['flash_error'] = $err; header('Location: dashboard.php?tab=config'); exit;
+        case 'save_email_template':
+            $lingua = trim($_POST['lingua'] ?? '');
+            if (!preg_match('/^[a-zA-Z0-9_-]{1,10}$/', $lingua)) {
+                $_SESSION['flash_error'] = 'Codice lingua non valido: usa 1-10 caratteri (lettere, numeri, _ -), es. "it", "en".';
+                header('Location: dashboard.php?tab=config');
+                exit;
             }
-            $pb    = trim($_POST['business_name']  ?? $conf['business_name'])  ?: 'La nostra Azienda';
-            $ps    = str_replace('{{business_name}}', $pb, trim($_POST['email_subject']  ?? $conf['email_subject'])  ?: "I tuoi regali da $pb");
-            $pg    = str_replace('{{nome}}', 'Cliente', trim($_POST['email_greeting'] ?? $conf['email_greeting']) ?: 'Ciao {{nome}}!');
-            $pi    = trim($_POST['email_intro']    ?? $conf['email_intro']);
-            $pc    = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['email_color'] ?? '') ? $_POST['email_color'] : $conf['email_color'];
+            $colore = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['colore'] ?? '') ? $_POST['colore'] : '#D64545';
+            save_email_template($lingua, [
+                'nome'       => trim($_POST['nome'] ?? '') ?: strtoupper($lingua),
+                'subject'    => trim($_POST['subject'] ?? '') ?: 'I tuoi regali da {{business_name}}',
+                'colore'     => $colore,
+                'body_html'  => (string)($_POST['body_html'] ?? ''),
+                'item_html'  => (string)($_POST['item_html'] ?? ''),
+                'is_default' => !empty($_POST['is_default']),
+            ]);
+            audit_log('Template email salvato', $lingua);
+            $_SESSION['flash_ok'] = "Template \"$lingua\" salvato.";
+            header('Location: dashboard.php?tab=config');
+            exit;
+
+        case 'delete_email_template':
+            $lingua = trim($_POST['lingua'] ?? '');
+            $all_templates = load_email_templates();
+            if (count($all_templates) <= 1) {
+                $_SESSION['flash_error'] = 'Non puoi eliminare l\'unico template rimasto: serve sempre almeno un template per inviare le email.';
+            } elseif (isset($all_templates[$lingua])) {
+                $was_default = $all_templates[$lingua]['is_default'];
+                delete_email_template($lingua);
+                if ($was_default) {
+                    // Deve sempre restarne uno predefinito: promuove il primo rimasto.
+                    $remaining = load_email_templates();
+                    $first_key = array_key_first($remaining);
+                    if ($first_key !== null) {
+                        save_email_template($first_key, array_merge($remaining[$first_key], ['is_default' => true]));
+                    }
+                }
+                audit_log('Template email eliminato', $lingua);
+                $_SESSION['flash_ok'] = "Template \"$lingua\" eliminato.";
+            }
+            header('Location: dashboard.php?tab=config');
+            exit;
+
+        case 'test_email_template':
+            $lingua = trim($_POST['lingua'] ?? '');
+            $to     = trim($_POST['test_email'] ?? $conf['smtp_user']);
+            if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
+                $_SESSION['flash_error'] = 'Indirizzo email non valido.';
+                header('Location: dashboard.php?tab=config');
+                exit;
+            }
+            $template = get_email_template($lingua ?: null);
+            if (!$template) {
+                $_SESSION['flash_error'] = 'Nessun template disponibile da testare.';
+                header('Location: dashboard.php?tab=config');
+                exit;
+            }
             require_once __DIR__ . '/PHPMailer/Exception.php';
             require_once __DIR__ . '/PHPMailer/PHPMailer.php';
             require_once __DIR__ . '/PHPMailer/SMTP.php';
+            $bname_t  = $conf['business_name'] ?: 'La nostra Azienda';
+            $logo_path = __DIR__ . '/logo.png';
+            $has_logo  = file_exists($logo_path);
+            $rendered  = render_email_template($template, $bname_t, 'Cliente', sample_regali_finali(), $has_logo);
             $mail = new Mailer(true);
             try {
-                $mail->isSMTP(); $mail->Host = $conf['smtp_host']; $mail->SMTPAuth = true;
-                $mail->Username = $conf['smtp_user']; $mail->Password = $conf['smtp_pass'];
+                $mail->isSMTP();
+                $mail->Host       = $conf['smtp_host'];
+                $mail->SMTPAuth   = true;
+                $mail->Username   = $conf['smtp_user'];
+                $mail->Password   = $conf['smtp_pass'];
                 $mail->SMTPSecure = ($conf['smtp_encryption'] === 'tls') ? Mailer::ENCRYPTION_STARTTLS : Mailer::ENCRYPTION_SMTPS;
-                $mail->Port = (int)$conf['smtp_port']; $mail->CharSet = 'UTF-8';
-                $mail->setFrom($conf['smtp_user'], $pb);
+                $mail->Port       = (int)$conf['smtp_port'];
+                $mail->CharSet    = 'UTF-8';
+                $mail->setFrom($conf['smtp_user'], $bname_t);
                 $mail->addAddress($to);
-                $mail->Subject = '[ANTEPRIMA] ' . $ps;
                 $mail->isHTML(true);
-                $logo_path = __DIR__ . '/logo.png';
-                $logo_html = file_exists($logo_path) ? '' : '<h1 style="color:#2d3142;">' . h($pb) . '</h1>';
-                if (file_exists($logo_path)) { $mail->addEmbeddedImage($logo_path, 'logo_cid'); $logo_html = '<img src="cid:logo_cid" style="max-width:150px;margin-bottom:20px;">'; }
-                $mail->Body = '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #eee;">
-                    <div style="text-align:center;">' . $logo_html . '</div>
-                    <h2 style="color:#2d3142;text-align:center;">' . h($pg) . '</h2>
-                    <p style="text-align:center;color:#4f5d75;">' . h($pi) . '</p>
-                    <div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;border-radius:8px;text-align:center;margin-bottom:15px;">
-                        <p style="color:#666;font-size:13px;margin:0;">Per l\'evento: <b>Evento di Esempio</b></p>
-                        <p style="color:' . h($pc) . ';font-size:24px;font-weight:bold;margin:10px 0;">GIFT-PREVIEW</p>
-                        <a href="#" style="display:inline-block;background:' . h($pc) . ';color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Usa Sconto 100%</a>
-                    </div>
-                    <p style="font-size:11px;color:#aaa;text-align:center;margin-top:30px;">&copy; ' . date('Y') . ' ' . h($pb) . '</p></div>';
-                $mail->AltBody = "$pg $pi";
+                $mail->Subject = '[TEST] ' . $rendered['subject'];
+                if ($has_logo) $mail->addEmbeddedImage($logo_path, 'logo_cid');
+                $mail->Body    = $rendered['html'];
+                $mail->AltBody = $rendered['text'];
                 $mail->send();
-                $ok_msg = "Email di anteprima inviata a $to.";
-                if ($is_json) { header('Content-Type: application/json'); echo json_encode(['ok' => true, 'msg' => $ok_msg]); exit; }
-                $_SESSION['flash_ok'] = $ok_msg;
+                $_SESSION['flash_ok'] = "Email di test inviata a $to con il template \"{$template['nome']}\".";
             } catch (MailException $e) {
-                $err = 'Errore SMTP: ' . $mail->ErrorInfo;
-                if ($is_json) { header('Content-Type: application/json'); echo json_encode(['ok' => false, 'msg' => $err]); exit; }
-                $_SESSION['flash_error'] = $err;
+                $_SESSION['flash_error'] = 'Errore SMTP: ' . $mail->ErrorInfo;
             }
-            header('Location: dashboard.php?tab=config'); exit;
+            header('Location: dashboard.php?tab=config');
+            exit;
 
         case 'regenerate_token':
             $conf['webhook_token'] = bin2hex(random_bytes(16));
@@ -466,6 +495,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Modificare una regola dal form non la riattiva/disattiva:
                     // preserva lo stato attuale (true se è una regola nuova).
                     'attiva'          => $regole[$tid]['attiva'] ?? true,
+                    // Lingua del template email da usare per questa regola;
+                    // vuoto = usa il template predefinito (vedi get_email_template).
+                    'lingua'          => trim($_POST['lingua'] ?? ''),
                 ];
                 save_regola_rule($tid, $regole[$tid]);
                 audit_log('Regola salvata', $tid);
@@ -536,16 +568,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $fh = fopen($_FILES['regole_csv']['tmp_name'], 'r');
             $header = $fh ? fgetcsv($fh) : null;
-            $expected_header = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva'];
-            if (!$header || array_map('trim', $header) !== $expected_header) {
+            $expected_header      = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua'];
+            $expected_header_old  = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva']; // esportato prima dell'introduzione della colonna lingua
+            $header_norm = $header ? array_map('trim', $header) : [];
+            if ($header_norm !== $expected_header && $header_norm !== $expected_header_old) {
                 $_SESSION['flash_error'] = 'Intestazione CSV non valida. Usa un file esportato da questa dashboard (' . implode(',', $expected_header) . ').';
                 header('Location: dashboard.php?tab=guida');
                 exit;
             }
+            $has_lingua_col = $header_norm === $expected_header;
             $imported_csv = [];
             $csv_error = null;
             while (($row = fgetcsv($fh)) !== false) {
-                if (count($row) < count($expected_header)) continue; // riga vuota/incompleta, ignorata
+                if (count($row) < count($expected_header_old)) continue; // riga vuota/incompleta, ignorata
+                $lingua = $has_lingua_col ? ($row[11] ?? '') : '';
                 [$tid, $descr, $tipo, $perc, $imp, $prefix, $targets_raw, $qta, $giorni, $qtymin, $attiva] = $row;
                 $tid = trim($tid);
                 $targets = array_values(array_filter(array_map('trim', explode('|', $targets_raw))));
@@ -564,6 +600,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'giorni_scadenza' => max(0, (int)($giorni ?: 0)),
                     'qty_minima'      => max(1, (int)($qtymin ?: 1)),
                     'attiva'          => trim((string)$attiva) !== '0',
+                    'lingua'          => trim($lingua),
                 ];
             }
             fclose($fh);
@@ -653,9 +690,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $conf       = load_config();
 $brand_name = $conf['business_name'] ?: 'Automazione Sconti';
 $active_tab = in_array($_GET['tab'] ?? '', ['sconti','config','log','guida']) ? $_GET['tab'] : 'sconti';
-$regole     = load_regole();
-$events     = [];
-$organizations = [];
+$regole          = load_regole();
+$email_templates = load_email_templates();
+$events          = [];
+$organizations   = [];
 
 if (!empty($conf['api_token']) && in_array($active_tab, ['sconti','guida'])) {
     $ch = curl_init();
@@ -698,10 +736,12 @@ if (file_exists(LOG_FILE)) {
 $edit_id   = isset($_GET['edit']) ? trim($_GET['edit']) : null;
 $edit_rule = ($edit_id && isset($regole[$edit_id])) ? $regole[$edit_id] : null;
 
+$edit_template_lingua = isset($_GET['edit_template']) ? trim($_GET['edit_template']) : null;
+$edit_template = ($edit_template_lingua && isset($email_templates[$edit_template_lingua])) ? $email_templates[$edit_template_lingua] : null;
+
 $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
 $base_url    = $scheme . '://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['REQUEST_URI']), '/') . '/';
 $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token'] ? '?token=' . h($conf['webhook_token']) : '');
-$logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') . '/logo.png' : null;
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
 ?>
@@ -897,6 +937,16 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                     <input type="number" name="qty_minima" value="<?= h((string)($edit_rule['qty_minima'] ?? 1)) ?>" min="1" max="9999">
                     <span class="tip">Biglietti dell'evento trigger richiesti nello stesso ordine perché la regola si attivi. 1 = sempre (default).</span>
                 </div>
+                <div class="input-group">
+                    <label>Lingua Email</label>
+                    <select name="lingua">
+                        <option value="">— Usa il template predefinito —</option>
+                        <?php foreach ($email_templates as $lingua => $tpl): ?>
+                            <option value="<?= h($lingua) ?>" <?= ($edit_rule['lingua'] ?? '') === $lingua ? 'selected' : '' ?>><?= h($tpl['nome']) ?><?= $tpl['is_default'] ? ' (predefinito)' : '' ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <span class="tip">Determina il template email usato per comunicare gli sconti di questa regola. Gestisci i template nella sezione "Template Email" del tab Configurazione.</span>
+                </div>
             </div>
             <div class="grid">
                 <div class="input-group" style="justify-content:flex-end;align-items:flex-end;grid-column:1/-1;">
@@ -985,39 +1035,6 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
                 <div class="input-group"><label>Password SMTP</label><input type="password" name="smtp_pass" value="<?= h($conf['smtp_pass']) ?>"></div>
             </div>
 
-            <h3>Template Email</h3>
-            <div class="grid">
-                <div class="input-group" style="grid-column:1/-1;">
-                    <label>Oggetto</label>
-                    <input type="text" name="email_subject" value="<?= h($conf['email_subject']) ?>">
-                    <span class="tip">Usa <code style="display:inline;padding:1px 5px;">{{business_name}}</code> per inserire il nome azienda.</span>
-                </div>
-            </div>
-            <div class="grid">
-                <div class="input-group" style="grid-column:1/-1;">
-                    <label>Saluto</label>
-                    <input type="text" name="email_greeting" value="<?= h($conf['email_greeting']) ?>">
-                    <span class="tip">Usa <code style="display:inline;padding:1px 5px;">{{nome}}</code> per il nome del cliente recuperato da Eventbrite. Es: <em>Ciao {{nome}}!</em> · <em>Gentile {{nome}},</em></span>
-                </div>
-            </div>
-            <div class="grid">
-                <div class="input-group" style="grid-column:1/-1;">
-                    <label>Testo Introduttivo</label>
-                    <textarea name="email_intro"><?= h($conf['email_intro']) ?></textarea>
-                </div>
-            </div>
-            <div class="grid">
-                <div class="input-group">
-                    <label>Colore Principale</label>
-                    <input type="color" name="email_color" value="<?= h($conf['email_color']) ?>">
-                </div>
-            </div>
-
-            <div style="margin:16px 0 4px;">
-                <button type="button" onclick="showPreview()" class="btn-info">👁 Anteprima Email</button>
-                <span class="tip" style="margin-left:12px;">Mostra come appare l'email al cliente con i valori attuali del form.</span>
-            </div>
-
             <h3>Notifiche Admin</h3>
             <div class="grid">
                 <div class="input-group">
@@ -1036,6 +1053,119 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
         </form>
     </div>
     <?php endif; ?>
+
+    <div class="card">
+        <h2>✉️ Template Email</h2>
+        <p style="color:#64748b;font-size:14px;margin-top:0;">Uno o più template HTML completi, uno per lingua/variante visiva. Ogni regola sceglie quale usare (campo "Lingua Email"); chi non specifica nulla usa il predefinito.</p>
+        <table>
+            <thead><tr><th>Codice</th><th>Nome</th><th>Oggetto</th><th>Predefinito</th><th></th></tr></thead>
+            <tbody>
+            <?php foreach ($email_templates as $lingua => $tpl): ?>
+                <tr>
+                    <td><span class="badge"><?= h($lingua) ?></span></td>
+                    <td><strong><?= h($tpl['nome']) ?></strong></td>
+                    <td style="color:#64748b;"><?= h($tpl['subject']) ?></td>
+                    <td><?= $tpl['is_default'] ? '<span style="color:#10b981;">✓ predefinito</span>' : '—' ?></td>
+                    <td style="white-space:nowrap;">
+                        <a href="?tab=config&action=preview_email_template&lingua=<?= urlencode($lingua) ?>" target="_blank" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;" title="Anteprima in una nuova scheda">👁</a>
+                        <?php if ($is_admin): ?>
+                        <a href="?tab=config&edit_template=<?= urlencode($lingua) ?>#template-form" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;">✏</a>
+                        <?php if (count($email_templates) > 1): ?>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare il template <?= h(addslashes($tpl['nome'])) ?>?')">
+                            <input type="hidden" name="action" value="delete_email_template">
+                            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+                            <input type="hidden" name="lingua" value="<?= h($lingua) ?>">
+                            <button type="submit" class="del-btn">&times;</button>
+                        </form>
+                        <?php endif; ?>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <?php if ($is_admin): ?>
+        <h3 id="template-form"><?= $edit_template ? '✏️ Modifica Template «' . h($edit_template_lingua) . '»' : '+ Nuovo Template' ?></h3>
+        <form method="POST">
+            <input type="hidden" name="action"     value="save_email_template">
+            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+            <div class="grid">
+                <div class="input-group">
+                    <label>Codice lingua</label>
+                    <input type="text" name="lingua" value="<?= h($edit_template_lingua ?? '') ?>" placeholder="es. it, en, es" maxlength="10" <?= $edit_template ? 'readonly style="background:#f1f5f9;"' : '' ?> required>
+                    <span class="tip">Identificativo libero, non deve necessariamente essere un codice ISO. Non modificabile dopo la creazione.</span>
+                </div>
+                <div class="input-group">
+                    <label>Nome (etichetta)</label>
+                    <input type="text" name="nome" value="<?= h($edit_template['nome'] ?? '') ?>" placeholder="es. Italiano">
+                </div>
+                <div class="input-group">
+                    <label>Colore Principale</label>
+                    <input type="color" name="colore" value="<?= h($edit_template['colore'] ?? '#D64545') ?>">
+                </div>
+            </div>
+            <div class="grid">
+                <div class="input-group" style="grid-column:1/-1;">
+                    <label>Oggetto</label>
+                    <input type="text" name="subject" value="<?= h($edit_template['subject'] ?? 'I tuoi regali da {{business_name}}') ?>">
+                    <span class="tip">Segnaposto disponibile: <code style="display:inline;padding:1px 5px;">{{business_name}}</code></span>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="input-group" style="grid-column:1/-1;">
+                    <label>Corpo Email (HTML)</label>
+                    <textarea name="body_html" style="min-height:220px;font-family:monospace;font-size:12px;"><?= h($edit_template['body_html'] ?? '') ?></textarea>
+                    <span class="tip">Segnaposto disponibili: <code style="display:inline;padding:1px 5px;">{{business_name}}</code> <code style="display:inline;padding:1px 5px;">{{nome}}</code> <code style="display:inline;padding:1px 5px;">{{items}}</code> <code style="display:inline;padding:1px 5px;">{{logo}}</code> <code style="display:inline;padding:1px 5px;">{{anno}}</code> <code style="display:inline;padding:1px 5px;">{{colore}}</code> — <code style="display:inline;padding:1px 5px;">{{items}}</code> viene sostituito con i blocchi sconto (vedi sotto), uno per ogni codice regalo.</span>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="input-group" style="grid-column:1/-1;">
+                    <label>Blocco Singolo Sconto (HTML, ripetuto per ogni codice)</label>
+                    <textarea name="item_html" style="min-height:120px;font-family:monospace;font-size:12px;"><?= h($edit_template['item_html'] ?? '') ?></textarea>
+                    <span class="tip">Segnaposto disponibili: <code style="display:inline;padding:1px 5px;">{{desc}}</code> <code style="display:inline;padding:1px 5px;">{{code}}</code> <code style="display:inline;padding:1px 5px;">{{url}}</code> <code style="display:inline;padding:1px 5px;">{{label}}</code> <code style="display:inline;padding:1px 5px;">{{colore}}</code></span>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="input-group">
+                    <label style="text-transform:none;font-size:13px;display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" name="is_default" value="1" style="width:auto;" <?= ($edit_template['is_default'] ?? false) ? 'checked' : '' ?>>
+                        Usa come predefinito
+                    </label>
+                </div>
+                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
+                    <div>
+                        <button type="submit"><?= $edit_template ? 'Aggiorna Template' : 'Crea Template' ?></button>
+                        <?php if ($edit_template): ?><a href="?tab=config#template-form" class="btn btn-secondary" style="margin-left:8px;">Annulla</a><?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        </form>
+
+        <h3>Invia Email di Test</h3>
+        <form method="POST">
+            <input type="hidden" name="action"     value="test_email_template">
+            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+            <div class="grid">
+                <div class="input-group">
+                    <label>Template</label>
+                    <select name="lingua">
+                        <?php foreach ($email_templates as $lingua => $tpl): ?>
+                            <option value="<?= h($lingua) ?>"><?= h($tpl['nome']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Indirizzo destinatario</label>
+                    <input type="email" name="test_email" value="<?= h($conf['smtp_user']) ?>" required>
+                </div>
+                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
+                    <button type="submit" class="btn-info">📧 Invia con dati di esempio</button>
+                </div>
+            </div>
+        </form>
+        <?php endif; ?>
+    </div>
 
     <div class="card">
         <h2>🔑 La tua password (<?= h($current_username) ?>)</h2>
@@ -1438,29 +1568,7 @@ $logo_preview_url = file_exists(__DIR__ . '/logo.png') ? rtrim($base_url, '/') .
     <?php endif; ?>
 </main>
 
-<input type="hidden" id="preview-csrf" value="<?= h($csrf) ?>">
-<div id="preview-modal" class="modal-overlay">
-    <div class="modal-box">
-        <div class="modal-head">
-            <div>
-                <div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:700;margin-bottom:5px;">Oggetto email</div>
-                <div id="preview-subject" style="font-weight:600;font-size:15px;color:#334155;"></div>
-            </div>
-            <button class="modal-close" onclick="closePreview()" title="Chiudi">×</button>
-        </div>
-        <iframe id="preview-iframe" style="flex:1;border:none;width:100%;min-height:460px;" sandbox="allow-same-origin"></iframe>
-        <div style="padding:14px 24px;border-top:1px solid #f1f5f9;background:#f8f9fa;display:flex;align-items:center;gap:10px;flex-shrink:0;">
-            <input type="email" id="preview-test-email" placeholder="Email destinatario test" value="<?= h($conf['smtp_user']) ?>" style="padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;flex:1;min-width:0;">
-            <button type="button" onclick="sendTestFromPreview()" style="background:#0ea5e9;color:white;border:none;padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;white-space:nowrap;">📧 Invia Test</button>
-            <span id="preview-test-status" style="font-size:13px;min-width:0;flex:1;"></span>
-        </div>
-    </div>
-</div>
-
 <script>
-const PREVIEW_LOGO = <?= json_encode($logo_preview_url) ?>;
-const PREVIEW_YEAR = <?= date('Y') ?>;
-
 function cp(id) {
     let t = document.getElementById('f_t'), r = document.getElementById('f_r');
     if (t && !t.value) t.value = id;
@@ -1474,75 +1582,6 @@ function syncPort(enc) {
     const p = document.getElementById('smtp_port');
     if (p && (p.value === '465' || p.value === '587')) p.value = enc === 'tls' ? '587' : '465';
 }
-function esc(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');
-}
-function showPreview() {
-    const sub      = document.querySelector('[name=email_subject]')?.value  || '';
-    const intro    = document.querySelector('[name=email_intro]')?.value    || '';
-    const greeting = document.querySelector('[name=email_greeting]')?.value || 'Ciao {{nome}}!';
-    const raw      = document.querySelector('[name=email_color]')?.value    || '#D64545';
-    const color    = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : '#D64545';
-    const bname    = document.querySelector('[name=business_name]')?.value  || 'Azienda';
-    const subj     = sub.replace('{{business_name}}', esc(bname));
-    const greet    = esc(greeting.replace('{{nome}}', 'Cliente'));
-
-    document.getElementById('preview-subject').textContent = subj || '(oggetto vuoto)';
-
-    const logo = PREVIEW_LOGO
-        ? `<img src="${PREVIEW_LOGO}" style="max-width:150px;margin-bottom:20px;">`
-        : `<h1 style="color:#2d3142;margin:0 0 20px;">${esc(bname)}</h1>`;
-
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:24px;background:#f8f9fa;font-family:Arial,sans-serif;">
-<div style="max-width:560px;margin:0 auto;padding:24px;border:1px solid #eee;background:white;border-radius:6px;">
-  <div style="text-align:center;margin-bottom:10px;">${logo}</div>
-  <h2 style="color:#2d3142;text-align:center;margin:0 0 12px;">${greet}</h2>
-  <p style="text-align:center;color:#4f5d75;margin:0 0 20px;">${esc(intro) || '&nbsp;'}</p>
-  <div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;border-radius:8px;text-align:center;margin-bottom:15px;">
-    <p style="color:#666;font-size:13px;margin:0 0 6px;">Per l'evento: <b>Evento di Esempio</b></p>
-    <p style="color:${esc(color)};font-size:26px;font-weight:bold;margin:10px 0;letter-spacing:2px;">GIFT-PREVIEW</p>
-    <a href="#" style="display:inline-block;background:${esc(color)};color:white;padding:10px 22px;text-decoration:none;border-radius:5px;font-size:14px;">Usa Sconto 100%</a>
-  </div>
-  <p style="font-size:11px;color:#aaa;text-align:center;margin-top:24px;">&copy; ${PREVIEW_YEAR} ${esc(bname)}</p>
-</div>
-</body></html>`;
-
-    document.getElementById('preview-iframe').srcdoc = html;
-    document.getElementById('preview-test-status').textContent = '';
-    document.getElementById('preview-modal').style.display = 'flex';
-}
-function closePreview() {
-    document.getElementById('preview-modal').style.display = 'none';
-}
-async function sendTestFromPreview() {
-    const to = document.getElementById('preview-test-email').value.trim();
-    const status = document.getElementById('preview-test-status');
-    if (!to) { status.textContent = '⚠️ Inserisci un indirizzo email.'; status.style.color = '#991b1b'; return; }
-    status.textContent = '⏳ Invio in corso…'; status.style.color = '#64748b';
-    const form = new FormData();
-    form.append('action',              'test_smtp_preview');
-    form.append('_format',             'json');
-    form.append('csrf_token',          document.getElementById('preview-csrf')?.value || '');
-    form.append('preview_test_email',  to);
-    form.append('business_name',       document.querySelector('[name=business_name]')?.value  || '');
-    form.append('email_subject',       document.querySelector('[name=email_subject]')?.value  || '');
-    form.append('email_greeting',      document.querySelector('[name=email_greeting]')?.value || '');
-    form.append('email_intro',         document.querySelector('[name=email_intro]')?.value    || '');
-    form.append('email_color',         document.querySelector('[name=email_color]')?.value    || '#D64545');
-    try {
-        const res  = await fetch('dashboard.php', { method: 'POST', body: form });
-        const data = await res.json();
-        status.textContent = (data.ok ? '✅ ' : '⚠️ ') + data.msg;
-        status.style.color = data.ok ? '#166534' : '#991b1b';
-    } catch (e) {
-        status.textContent = '⚠️ Errore di rete. Riprova.';
-        status.style.color = '#991b1b';
-    }
-}
-document.getElementById('preview-modal').addEventListener('click', function(e) {
-    if (e.target === this) closePreview();
-});
 (function() {
     const ts = document.getElementById('tipo_sconto');
     if (ts) toggleTipo(ts.value);

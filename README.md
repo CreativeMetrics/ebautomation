@@ -27,12 +27,12 @@ Applicazione PHP standalone, zero dipendenze esterne (nessun Composer/npm), pens
    - **Private Token API**: da eventbrite.com → Account → Impostazioni → Chiavi API
    - **Organization ID**: mostrato nel tab *Guida* una volta inserito il token
    - **Credenziali SMTP** per l'invio email (host, porta, cifratura, utente, password)
-   - Personalizzazione del template email (oggetto, saluto, testo introduttivo, colore, logo)
+   - **Template email** (tab *Configurazione* → sezione *Template Email*): uno o più template HTML personalizzabili liberamente (oggetto, colori, struttura), ciascuno associato a un codice lingua. Uno è sempre marcato come predefinito. Ogni regola sconto può scegliere quale template usare; se non specificato si usa il predefinito. Anteprima diretta dal browser prima di salvare.
 5. **Registra il webhook su Eventbrite**: copia l'URL mostrato nel tab *Guida* (già completo di token) e incollalo su Eventbrite → Account → Webhook, selezionando gli eventi:
    - `order.placed`
    - `order.refunded`
    - `order.updated`
-6. **Crea le regole sconto** (tab *Regole Sconti*): per ogni evento trigger indichi uno o più eventi target a cui va generato il codice sconto, con percentuale o importo fisso, quantità di utilizzi, scadenza e quantità minima di biglietti trigger — tutti opzionali tranne trigger/target.
+6. **Crea le regole sconto** (tab *Regole Sconti*): per ogni evento trigger indichi uno o più eventi target a cui va generato il codice sconto, con percentuale o importo fisso, quantità di utilizzi, scadenza, quantità minima di biglietti trigger e template email/lingua da usare — tutti opzionali tranne trigger/target.
 7. **Verifica che tutto funzioni**:
    - **Health Check** (tab *Guida*, anche in formato JSON per un monitor esterno: `dashboard.php?action=health&format=json`)
    - **Simulazione Webhook** con un Order ID reale (tab *Guida*): testa l'intero flusso senza aspettare un acquisto vero
@@ -67,6 +67,7 @@ tests/
 ## Funzionalità principali
 
 - **Regole sconto** con percentuale o importo fisso, quantità utilizzi, scadenza, quantità minima di biglietti trigger, attivazione/disattivazione singola
+- **Template email multi-lingua**: template HTML illimitati, uno per lingua/variante grafica, con anteprima live e invio di email di test; ogni regola sceglie il proprio (o usa il predefinito)
 - **Multi-organizzazione**: un solo token Eventbrite può gestire regole su più organizzazioni — l'app risolve dinamicamente quella corretta per ogni evento target
 - **Retry automatico con backoff** su creazione sconti e invio email; ordini non completati finiscono in una coda ritentabile dalla dashboard
 - **Gestione `order.updated`**: se un ordine già evaso viene modificato (es. quantità aumentata), l'app rivaluta le regole senza mai revocare sconti già emessi

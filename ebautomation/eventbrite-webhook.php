@@ -217,11 +217,17 @@ $discounts_complete = empty($targets_missing);
 
 // Ricostruisce i dati necessari all'email per TUTTI gli sconti noti finora
 // (non solo quelli creati in questo passaggio), così un retry che recupera
-// uno sconto mancante può reinviare un'email completa.
+// uno sconto mancante può reinviare un'email completa. Determina anche la
+// lingua/template da usare: quella della prima regola incontrata che ha
+// contribuito allo sconto (se un ordine matcha regole con lingue diverse,
+// l'intera email consolidata usa questa — non la spezziamo in più email per
+// non vanificare la logica "un cliente riceve un'unica email con tutto").
 $regali_finali = [];
+$chosen_lingua = null;
 foreach ($regole as $e_id => $r) {
     foreach (($r['target_ids'] ?? []) as $t_id) {
         if (!isset($discounts[$t_id]) || isset($regali_finali[$t_id])) continue;
+        if ($chosen_lingua === null) $chosen_lingua = ($r['lingua'] ?? '') ?: null;
         $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
         $regali_finali[$t_id] = [
             'desc'  => $r['descrizione'] ?? '',
@@ -245,69 +251,46 @@ if (!empty($regali_finali) && !empty($targets_to_email)) {
     if (!$recipient) {
         write_log("Email non valida per ordine $order_id: " . ($order['email'] ?? 'N/A'));
     } else {
-        $email_color    = $conf['email_color']    ?: '#D64545';
-        $email_subject  = str_replace('{{business_name}}', $business_name, $conf['email_subject'] ?: "I tuoi regali da $business_name");
-        $email_intro    = $conf['email_intro']    ?: 'Grazie per i tuoi acquisti. Ecco i regali che abbiamo riservato per te:';
-        $nome_cliente   = $order['first_name'] ?? 'Cliente';
-        $greeting_tpl   = $conf['email_greeting'] ?: 'Ciao {{nome}}!';
-        $greeting_html  = str_replace('{{nome}}', h($nome_cliente), h($greeting_tpl));
+        $nome_cliente = $order['first_name'] ?? 'Cliente';
+        $template     = get_email_template($chosen_lingua);
+        $logo_path    = __DIR__ . '/logo.png';
+        $has_logo     = file_exists($logo_path);
 
-        $items_html = '';
-        foreach ($regali_finali as $reg) {
-            $items_html .= '
-            <div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;margin-bottom:15px;border-radius:8px;text-align:center;">
-                <p style="color:#666;font-size:13px;margin:0;">Per l\'evento: <b>' . h($reg['desc']) . '</b></p>
-                <p style="color:' . h($email_color) . ';font-size:24px;font-weight:bold;margin:10px 0;">' . h($reg['code']) . '</p>
-                <a href="' . h($reg['url']) . '" style="display:inline-block;background:' . h($email_color) . ';color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Usa Sconto ' . h($reg['label']) . '</a>
-            </div>';
-        }
+        if (!$template) {
+            write_log("ERRORE: nessun template email configurato, impossibile inviare email per ordine $order_id.");
+        } else {
+            $rendered = render_email_template($template, $business_name, $nome_cliente, $regali_finali, $has_logo);
 
-        $logo_path = __DIR__ . '/logo.png';
-        $plain_greeting = str_replace('{{nome}}', $nome_cliente, $greeting_tpl);
-
-        // Fino a 3 tentativi di invio SMTP: ricostruiamo il messaggio ad ogni
-        // tentativo perché PHPMailer non garantisce di essere riutilizzabile
-        // dopo un errore di connessione.
-        for ($attempt = 1; $attempt <= 3; $attempt++) {
-            $mail = new PHPMailer(true);
-            try {
-                $mail->isSMTP();
-                $mail->Host       = $conf['smtp_host'];
-                $mail->SMTPAuth   = true;
-                $mail->Username   = $conf['smtp_user'];
-                $mail->Password   = $conf['smtp_pass'];
-                $mail->SMTPSecure = ($conf['smtp_encryption'] === 'tls') ? PHPMailer::ENCRYPTION_STARTTLS : PHPMailer::ENCRYPTION_SMTPS;
-                $mail->Port       = (int)$conf['smtp_port'];
-                $mail->CharSet    = 'UTF-8';
-                $mail->setFrom($conf['smtp_user'], $business_name);
-                $mail->addAddress($recipient);
-                $mail->isHTML(true);
-                $mail->Subject = $email_subject;
-
-                if (file_exists($logo_path)) {
-                    $mail->addEmbeddedImage($logo_path, 'logo_cid');
-                    $logo_html = '<img src="cid:logo_cid" style="max-width:150px;margin-bottom:20px;">';
-                } else {
-                    $logo_html = '<h1 style="color:#2d3142;">' . h($business_name) . '</h1>';
+            // Fino a 3 tentativi di invio SMTP: ricostruiamo il messaggio ad ogni
+            // tentativo perché PHPMailer non garantisce di essere riutilizzabile
+            // dopo un errore di connessione.
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                $mail = new PHPMailer(true);
+                try {
+                    $mail->isSMTP();
+                    $mail->Host       = $conf['smtp_host'];
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = $conf['smtp_user'];
+                    $mail->Password   = $conf['smtp_pass'];
+                    $mail->SMTPSecure = ($conf['smtp_encryption'] === 'tls') ? PHPMailer::ENCRYPTION_STARTTLS : PHPMailer::ENCRYPTION_SMTPS;
+                    $mail->Port       = (int)$conf['smtp_port'];
+                    $mail->CharSet    = 'UTF-8';
+                    $mail->setFrom($conf['smtp_user'], $business_name);
+                    $mail->addAddress($recipient);
+                    $mail->isHTML(true);
+                    $mail->Subject = $rendered['subject'];
+                    if ($has_logo) $mail->addEmbeddedImage($logo_path, 'logo_cid');
+                    $mail->Body    = $rendered['html'];
+                    $mail->AltBody = $rendered['text'];
+                    $mail->send();
+                    write_log("Email inviata a $recipient per ordine $order_id (template: {$template['nome']}, tentativo $attempt)");
+                    $email_ok = true;
+                    $email_sent_targets = array_keys($discounts);
+                    break;
+                } catch (Exception $e) {
+                    write_log("ERRORE SMTP (tentativo $attempt) per ordine $order_id: " . $mail->ErrorInfo);
+                    if ($attempt < 3) usleep([300000, 900000][$attempt - 1]);
                 }
-
-                $mail->Body = '
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #eee;">
-                    <div style="text-align:center;">' . $logo_html . '</div>
-                    <h2 style="color:#2d3142;text-align:center;">' . $greeting_html . '</h2>
-                    <p style="text-align:center;color:#4f5d75;">' . h($email_intro) . '</p>
-                    ' . $items_html . '
-                    <p style="font-size:11px;color:#aaa;text-align:center;margin-top:30px;">&copy; ' . date('Y') . ' ' . h($business_name) . '</p>
-                </div>';
-                $mail->AltBody = "$plain_greeting $email_intro Apri questa email in un client HTML per visualizzare i tuoi codici sconto.";
-                $mail->send();
-                write_log("Email inviata a $recipient per ordine $order_id (tentativo $attempt)");
-                $email_ok = true;
-                $email_sent_targets = array_keys($discounts);
-                break;
-            } catch (Exception $e) {
-                write_log("ERRORE SMTP (tentativo $attempt) per ordine $order_id: " . $mail->ErrorInfo);
-                if ($attempt < 3) usleep([300000, 900000][$attempt - 1]);
             }
         }
     }
