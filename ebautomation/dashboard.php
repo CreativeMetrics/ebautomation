@@ -358,18 +358,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: dashboard.php?tab=config');
                 exit;
             }
-            $colore = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['colore'] ?? '') ? $_POST['colore'] : '#D64545';
+            $colore      = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['colore'] ?? '') ? $_POST['colore'] : '#D64545';
+            $editor_mode = ($_POST['editor_mode'] ?? 'visual') === 'code' ? 'code' : 'visual';
+
+            if ($editor_mode === 'visual') {
+                $raw_blocks = json_decode((string)($_POST['blocks_json'] ?? '[]'), true);
+                $blocks     = sanitize_email_blocks(is_array($raw_blocks) ? $raw_blocks : []);
+                $rendered   = render_blocks_to_html($blocks, $colore);
+                $body_html  = $rendered['body_html'];
+                $item_html  = $rendered['item_html'];
+            } else {
+                // Modalità codice: HTML scritto a mano, il template non è
+                // più ricostruibile nell'editor a blocchi (blocks = null).
+                $blocks    = null;
+                $body_html = (string)($_POST['body_html'] ?? '');
+                $item_html = (string)($_POST['item_html'] ?? '');
+            }
+
             save_email_template($lingua, [
                 'nome'       => trim($_POST['nome'] ?? '') ?: strtoupper($lingua),
                 'subject'    => trim($_POST['subject'] ?? '') ?: 'I tuoi regali da {{business_name}}',
                 'colore'     => $colore,
-                'body_html'  => (string)($_POST['body_html'] ?? ''),
-                'item_html'  => (string)($_POST['item_html'] ?? ''),
+                'body_html'  => $body_html,
+                'item_html'  => $item_html,
                 'is_default' => !empty($_POST['is_default']),
+                'blocks'     => $blocks,
             ]);
             audit_log('Template email salvato', $lingua);
             $_SESSION['flash_ok'] = "Template \"$lingua\" salvato.";
             header('Location: dashboard.php?tab=config');
+            exit;
+
+        case 'preview_blocks':
+            // Anteprima dal vivo mentre si modifica nell'editor a blocchi,
+            // prima di salvare: stesso motore di rendering usato per email
+            // reali/anteprime salvate, applicato però a blocchi non ancora
+            // persistiti (arrivano interamente dal form via AJAX).
+            header('Content-Type: text/html; charset=utf-8');
+            $pb_raw_blocks = json_decode((string)($_POST['blocks_json'] ?? '[]'), true);
+            $pb_blocks     = sanitize_email_blocks(is_array($pb_raw_blocks) ? $pb_raw_blocks : []);
+            $pb_colore     = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['colore'] ?? '') ? $_POST['colore'] : '#D64545';
+            $pb_rendered   = render_blocks_to_html($pb_blocks, $pb_colore);
+            $pb_template   = ['colore' => $pb_colore, 'body_html' => $pb_rendered['body_html'], 'item_html' => $pb_rendered['item_html']];
+            $pb_has_logo   = file_exists(__DIR__ . '/logo.png');
+            $pb_preview    = render_email_template($pb_template, $conf['business_name'] ?: 'La nostra Azienda', 'Mario', sample_regali_finali(), $pb_has_logo);
+            echo $pb_preview['html'];
             exit;
 
         case 'delete_email_template':
@@ -738,6 +771,12 @@ $edit_rule = ($edit_id && isset($regole[$edit_id])) ? $regole[$edit_id] : null;
 
 $edit_template_lingua = isset($_GET['edit_template']) ? trim($_GET['edit_template']) : null;
 $edit_template = ($edit_template_lingua && isset($email_templates[$edit_template_lingua])) ? $email_templates[$edit_template_lingua] : null;
+// Un template nuovo, o già creato/modificato nell'editor a blocchi, si apre
+// in modalità visuale; un template con HTML scritto a mano (blocks=null)
+// si apre in modalità codice, coi blocchi di default pronti se l'utente
+// sceglie comunque di passare all'editor visivo.
+$edit_template_initial_mode  = ($edit_template === null || $edit_template['blocks'] !== null) ? 'visual' : 'code';
+$edit_template_blocks_for_js = $edit_template['blocks'] ?? default_email_blocks();
 
 $scheme      = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
 $base_url    = $scheme . '://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['REQUEST_URI']), '/') . '/';
@@ -797,11 +836,31 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
         code { background: #f1f5f9; padding: 10px 14px; border-radius: 6px; display: block; font-size: 13px; word-break: break-all; }
         .edit-highlight { background: #fffbeb; border: 2px solid #fcd34d; }
         .tip { font-size: 12px; color: #94a3b8; margin-top: 4px; }
-        .modal-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.65); z-index:1000; display:none; justify-content:center; align-items:center; }
-        .modal-box { background:white; border-radius:12px; max-width:680px; width:95%; max-height:92vh; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 25px 50px rgba(0,0,0,0.25); }
-        .modal-head { display:flex; justify-content:space-between; align-items:flex-start; padding:18px 24px; border-bottom:1px solid #f1f5f9; flex-shrink:0; }
-        .modal-close { background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8; padding:0; line-height:1; }
-        .modal-close:hover { color:#334155; }
+        .editor-mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+        .editor-mode-toggle button { background: #f1f5f9; color: #64748b; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 13px; }
+        .editor-mode-toggle button.active { background: var(--primary); color: white; }
+        .block-editor { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
+        .block-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+        .block-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+        .block-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .block-card-title { font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .03em; }
+        .block-card-actions button { background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 15px; padding: 2px 6px; }
+        .block-card-actions button:hover:not(:disabled) { color: #334155; }
+        .block-card-actions button:disabled { opacity: .3; cursor: default; }
+        .block-card-actions button.del:hover:not(:disabled) { color: #ef4444; }
+        .field-row { display: flex; gap: 10px; margin-bottom: 8px; }
+        .field-row > * { flex: 1; min-width: 0; }
+        .block-add-menu { display: flex; flex-wrap: wrap; gap: 8px; }
+        .block-add-menu button { background: white; border: 1px dashed #cbd5e1; color: #475569; font-weight: 600; font-size: 12px; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+        .block-add-menu button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+        .block-add-menu button:disabled { opacity: .35; cursor: default; }
+        .block-preview-panel { position: sticky; top: 20px; }
+        .block-preview-frame { width: 100%; height: 520px; border: 1px solid #e2e8f0; border-radius: 10px; background: white; }
+        @media (max-width: 900px) {
+            .block-editor { grid-template-columns: 1fr; }
+            .block-preview-panel { position: static; }
+            .block-preview-frame { height: 400px; }
+        }
     </style>
 </head>
 <body>
@@ -1102,7 +1161,7 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
                 </div>
                 <div class="input-group">
                     <label>Colore Principale</label>
-                    <input type="color" name="colore" value="<?= h($edit_template['colore'] ?? '#D64545') ?>">
+                    <input type="color" name="colore" id="tpl_colore" value="<?= h($edit_template['colore'] ?? '#D64545') ?>">
                 </div>
             </div>
             <div class="grid">
@@ -1112,20 +1171,53 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
                     <span class="tip">Segnaposto disponibile: <code style="display:inline;padding:1px 5px;">{{business_name}}</code></span>
                 </div>
             </div>
-            <div class="grid">
-                <div class="input-group" style="grid-column:1/-1;">
-                    <label>Corpo Email (HTML)</label>
-                    <textarea name="body_html" style="min-height:220px;font-family:monospace;font-size:12px;"><?= h($edit_template['body_html'] ?? '') ?></textarea>
-                    <span class="tip">Segnaposto disponibili: <code style="display:inline;padding:1px 5px;">{{business_name}}</code> <code style="display:inline;padding:1px 5px;">{{nome}}</code> <code style="display:inline;padding:1px 5px;">{{items}}</code> <code style="display:inline;padding:1px 5px;">{{logo}}</code> <code style="display:inline;padding:1px 5px;">{{anno}}</code> <code style="display:inline;padding:1px 5px;">{{colore}}</code> — <code style="display:inline;padding:1px 5px;">{{items}}</code> viene sostituito con i blocchi sconto (vedi sotto), uno per ogni codice regalo.</span>
+
+            <div class="input-group" style="margin-bottom:20px;">
+                <label>Struttura Email</label>
+                <div class="editor-mode-toggle">
+                    <button type="button" id="mode-btn-visual">🧱 Editor Visivo</button>
+                    <button type="button" id="mode-btn-code">&lt;/&gt; Codice HTML</button>
+                </div>
+
+                <input type="hidden" name="editor_mode" id="editor_mode_input" value="<?= h($edit_template_initial_mode) ?>">
+                <input type="hidden" name="blocks_json" id="blocks_json_input" value="">
+
+                <div id="visual-editor-box"<?= $edit_template_initial_mode !== 'visual' ? ' hidden' : '' ?>>
+                    <div class="block-editor">
+                        <div>
+                            <div class="block-list" id="blocks-list"></div>
+                            <div class="block-add-menu">
+                                <button type="button" data-add="logo">+ 🖼 Logo</button>
+                                <button type="button" data-add="heading">+ 🔤 Titolo</button>
+                                <button type="button" data-add="text">+ 📝 Testo</button>
+                                <button type="button" data-add="gift_box">+ 🎁 Box Sconto</button>
+                                <button type="button" data-add="divider">+ ➖ Divisore</button>
+                                <button type="button" data-add="spacer">+ ↕ Spazio</button>
+                                <button type="button" data-add="footer">+ 📄 Piè di pagina</button>
+                            </div>
+                            <p class="tip" style="margin-top:12px;">Segnaposto utilizzabili nei testi: <code style="display:inline;padding:1px 5px;">{{nome}}</code> <code style="display:inline;padding:1px 5px;">{{anno}}</code> <code style="display:inline;padding:1px 5px;">{{business_name}}</code></p>
+                        </div>
+                        <div class="block-preview-panel">
+                            <label style="display:block;margin-bottom:8px;">Anteprima Live</label>
+                            <iframe id="block-preview-frame" class="block-preview-frame" sandbox="allow-same-origin" title="Anteprima email"></iframe>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="code-editor-box"<?= $edit_template_initial_mode !== 'code' ? ' hidden' : '' ?>>
+                    <div class="input-group" style="margin-bottom:16px;">
+                        <label>Corpo Email (HTML)</label>
+                        <textarea name="body_html" style="min-height:220px;font-family:monospace;font-size:12px;"><?= h($edit_template['body_html'] ?? '') ?></textarea>
+                        <span class="tip">Segnaposto disponibili: <code style="display:inline;padding:1px 5px;">{{business_name}}</code> <code style="display:inline;padding:1px 5px;">{{nome}}</code> <code style="display:inline;padding:1px 5px;">{{items}}</code> <code style="display:inline;padding:1px 5px;">{{logo}}</code> <code style="display:inline;padding:1px 5px;">{{anno}}</code> <code style="display:inline;padding:1px 5px;">{{colore}}</code> — <code style="display:inline;padding:1px 5px;">{{items}}</code> viene sostituito con i blocchi sconto (vedi sotto), uno per ogni codice regalo.</span>
+                    </div>
+                    <div class="input-group">
+                        <label>Blocco Singolo Sconto (HTML, ripetuto per ogni codice)</label>
+                        <textarea name="item_html" style="min-height:120px;font-family:monospace;font-size:12px;"><?= h($edit_template['item_html'] ?? '') ?></textarea>
+                        <span class="tip">Segnaposto disponibili: <code style="display:inline;padding:1px 5px;">{{desc}}</code> <code style="display:inline;padding:1px 5px;">{{code}}</code> <code style="display:inline;padding:1px 5px;">{{url}}</code> <code style="display:inline;padding:1px 5px;">{{label}}</code> <code style="display:inline;padding:1px 5px;">{{colore}}</code></span>
+                    </div>
                 </div>
             </div>
-            <div class="grid">
-                <div class="input-group" style="grid-column:1/-1;">
-                    <label>Blocco Singolo Sconto (HTML, ripetuto per ogni codice)</label>
-                    <textarea name="item_html" style="min-height:120px;font-family:monospace;font-size:12px;"><?= h($edit_template['item_html'] ?? '') ?></textarea>
-                    <span class="tip">Segnaposto disponibili: <code style="display:inline;padding:1px 5px;">{{desc}}</code> <code style="display:inline;padding:1px 5px;">{{code}}</code> <code style="display:inline;padding:1px 5px;">{{url}}</code> <code style="display:inline;padding:1px 5px;">{{label}}</code> <code style="display:inline;padding:1px 5px;">{{colore}}</code></span>
-                </div>
-            </div>
+
             <div class="grid">
                 <div class="input-group">
                     <label style="text-transform:none;font-size:13px;display:flex;align-items:center;gap:8px;">
@@ -1141,6 +1233,171 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
                 </div>
             </div>
         </form>
+
+        <script>
+        (function() {
+            const CSRF = <?= json_encode($csrf, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+            const DEFAULT_BLOCKS = <?= json_encode(default_email_blocks(), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+            const BLOCK_LABELS = {
+                logo: '🖼 Logo / Nome Azienda', heading: '🔤 Titolo', text: '📝 Testo',
+                gift_box: '🎁 Box Sconto', divider: '➖ Divisore', spacer: '↕ Spazio', footer: '📄 Piè di pagina',
+            };
+
+            let blocks = <?= json_encode($edit_template_blocks_for_js, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+            let editorMode = <?= json_encode($edit_template_initial_mode) ?>;
+
+            const listEl = document.getElementById('blocks-list');
+            if (!listEl) return; // form non presente (utente non admin)
+
+            function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+            function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+            function alignSelect(b, i) {
+                const cur = b.align || 'center';
+                const labels = { left: 'Sinistra', center: 'Centro', right: 'Destra' };
+                return '<select data-f="align" data-i="' + i + '">' + ['left','center','right'].map(v =>
+                    '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + labels[v] + '</option>'
+                ).join('') + '</select>';
+            }
+
+            function newBlock(type) {
+                switch (type) {
+                    case 'logo':     return { type: 'logo', align: 'center' };
+                    case 'heading':  return { type: 'heading', text: 'Ciao {{nome}}!', align: 'center', color: '#2d3142' };
+                    case 'text':     return { type: 'text', text: 'Scrivi qui il tuo testo…', align: 'center', color: '#4f5d75' };
+                    case 'gift_box': return { type: 'gift_box', label: "Per l'evento:", button_text: 'Usa Sconto' };
+                    case 'divider':  return { type: 'divider' };
+                    case 'spacer':   return { type: 'spacer', height: 20 };
+                    case 'footer':   return { type: 'footer', text: '© {{anno}} {{business_name}}' };
+                }
+            }
+
+            function blockFields(b, i) {
+                switch (b.type) {
+                    case 'logo':
+                        return '<div class="field-row">' + alignSelect(b, i) + '</div>';
+                    case 'heading':
+                        return '<div class="field-row"><input type="text" data-f="text" data-i="' + i + '" value="' + escAttr(b.text || '') + '" placeholder="Ciao {{nome}}!" maxlength="200"></div>'
+                            + '<div class="field-row">' + alignSelect(b, i) + '<input type="color" data-f="color" data-i="' + i + '" value="' + (b.color || '#2d3142') + '" title="Colore testo"></div>';
+                    case 'text':
+                        return '<div class="field-row"><textarea data-f="text" data-i="' + i + '" maxlength="1000" style="min-height:60px;">' + escHtml(b.text || '') + '</textarea></div>'
+                            + '<div class="field-row">' + alignSelect(b, i) + '<input type="color" data-f="color" data-i="' + i + '" value="' + (b.color || '#4f5d75') + '" title="Colore testo"></div>';
+                    case 'gift_box':
+                        return '<div class="field-row">'
+                            + '<input type="text" data-f="label" data-i="' + i + '" value="' + escAttr(b.label || '') + '" placeholder="Per l\'evento:" maxlength="100">'
+                            + '<input type="text" data-f="button_text" data-i="' + i + '" value="' + escAttr(b.button_text || '') + '" placeholder="Usa Sconto" maxlength="60">'
+                            + '</div><span class="tip">Colore ripreso dal "Colore Principale" qui sopra. Va sempre al posto del codice sconto, uno per ogni regalo.</span>';
+                    case 'divider':
+                        return '<span class="tip">Una riga sottile per separare le sezioni, nessuna impostazione.</span>';
+                    case 'spacer':
+                        return '<div class="field-row"><input type="number" data-f="height" data-i="' + i + '" value="' + (b.height || 20) + '" min="4" max="120" style="max-width:120px;flex:none;"><span class="tip" style="align-self:center;">altezza in pixel</span></div>';
+                    case 'footer':
+                        return '<div class="field-row"><textarea data-f="text" data-i="' + i + '" maxlength="300" style="min-height:50px;">' + escHtml(b.text || '') + '</textarea></div><span class="tip">Segnaposto disponibili: {{anno}} {{business_name}}</span>';
+                    default:
+                        return '';
+                }
+            }
+
+            function renderBlockCard(b, i) {
+                return '<div class="block-card">'
+                    + '<div class="block-card-head">'
+                    + '<span class="block-card-title">' + (BLOCK_LABELS[b.type] || b.type) + '</span>'
+                    + '<span class="block-card-actions">'
+                    + '<button type="button" data-act="up" data-i="' + i + '"' + (i === 0 ? ' disabled' : '') + ' title="Sposta su">↑</button>'
+                    + '<button type="button" data-act="down" data-i="' + i + '"' + (i === blocks.length - 1 ? ' disabled' : '') + ' title="Sposta giù">↓</button>'
+                    + '<button type="button" class="del" data-act="del" data-i="' + i + '" title="Elimina">🗑</button>'
+                    + '</span></div>'
+                    + blockFields(b, i)
+                    + '</div>';
+            }
+
+            function updateAddMenu() {
+                const hasLogo = blocks.some(b => b.type === 'logo');
+                const hasGift = blocks.some(b => b.type === 'gift_box');
+                document.querySelectorAll('.block-add-menu button[data-add]').forEach(btn => {
+                    const t = btn.getAttribute('data-add');
+                    btn.disabled = (t === 'logo' && hasLogo) || (t === 'gift_box' && hasGift);
+                });
+            }
+
+            function syncHidden() {
+                document.getElementById('blocks_json_input').value = JSON.stringify(blocks);
+            }
+
+            function renderList() {
+                listEl.innerHTML = blocks.map(renderBlockCard).join('') || '<p class="tip">Nessun blocco: aggiungine uno qui sotto.</p>';
+                updateAddMenu();
+                syncHidden();
+            }
+
+            let previewTimer = null;
+            function schedulePreview() {
+                clearTimeout(previewTimer);
+                previewTimer = setTimeout(runPreview, 400);
+            }
+            async function runPreview() {
+                const frame = document.getElementById('block-preview-frame');
+                if (!frame || editorMode !== 'visual') return;
+                const form = new FormData();
+                form.append('action', 'preview_blocks');
+                form.append('csrf_token', CSRF);
+                form.append('blocks_json', JSON.stringify(blocks));
+                form.append('colore', document.getElementById('tpl_colore').value);
+                try {
+                    const res = await fetch('dashboard.php', { method: 'POST', body: form });
+                    frame.srcdoc = await res.text();
+                } catch (e) { /* anteprima non disponibile, non blocca la modifica */ }
+            }
+
+            listEl.addEventListener('input', function(e) {
+                const f = e.target.getAttribute('data-f'), i = e.target.getAttribute('data-i');
+                if (f === null || i === null) return;
+                blocks[+i][f] = (e.target.type === 'number') ? (parseInt(e.target.value, 10) || 0) : e.target.value;
+                syncHidden();
+                schedulePreview();
+            });
+            listEl.addEventListener('click', function(e) {
+                const btn = e.target.closest('button[data-act]');
+                if (!btn) return;
+                const act = btn.getAttribute('data-act'), i = +btn.getAttribute('data-i');
+                if (act === 'del') blocks.splice(i, 1);
+                else if (act === 'up' && i > 0) [blocks[i - 1], blocks[i]] = [blocks[i], blocks[i - 1]];
+                else if (act === 'down' && i < blocks.length - 1) [blocks[i + 1], blocks[i]] = [blocks[i], blocks[i + 1]];
+                renderList();
+                schedulePreview();
+            });
+            document.querySelectorAll('.block-add-menu button[data-add]').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (btn.disabled) return;
+                    blocks.push(newBlock(btn.getAttribute('data-add')));
+                    renderList();
+                    schedulePreview();
+                });
+            });
+            document.getElementById('tpl_colore').addEventListener('input', schedulePreview);
+
+            function setMode(mode) {
+                if (mode === 'visual' && editorMode === 'code') {
+                    if (!confirm('Passando all\'Editor Visivo, al salvataggio l\'HTML scritto a mano verrà sostituito da un template generato dai blocchi. Continuare?')) return;
+                    if (!blocks || !blocks.length) blocks = JSON.parse(JSON.stringify(DEFAULT_BLOCKS));
+                }
+                editorMode = mode;
+                document.getElementById('editor_mode_input').value = mode;
+                document.getElementById('mode-btn-visual').classList.toggle('active', mode === 'visual');
+                document.getElementById('mode-btn-code').classList.toggle('active', mode === 'code');
+                document.getElementById('visual-editor-box').hidden = mode !== 'visual';
+                document.getElementById('code-editor-box').hidden = mode !== 'code';
+                if (mode === 'visual') { renderList(); runPreview(); }
+            }
+            document.getElementById('mode-btn-visual').addEventListener('click', () => setMode('visual'));
+            document.getElementById('mode-btn-code').addEventListener('click', () => setMode('code'));
+            document.getElementById('mode-btn-visual').classList.toggle('active', editorMode === 'visual');
+            document.getElementById('mode-btn-code').classList.toggle('active', editorMode === 'code');
+
+            renderList();
+            if (editorMode === 'visual') runPreview();
+        })();
+        </script>
 
         <h3>Invia Email di Test</h3>
         <form method="POST">

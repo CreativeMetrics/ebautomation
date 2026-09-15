@@ -82,6 +82,7 @@ function ensure_schema(PDO $pdo): void {
     // Migrazioni additive su tabelle già esistenti (SQLite non supporta
     // "ADD COLUMN IF NOT EXISTS", quindi controlliamo prima via PRAGMA).
     add_column_if_missing($pdo, 'users', 'role', "TEXT NOT NULL DEFAULT 'admin'");
+    add_column_if_missing($pdo, 'email_templates', 'blocks_json', 'TEXT');
 }
 
 // NB: $table/$column/$definition vanno interpolati direttamente nell'SQL
@@ -240,22 +241,20 @@ function migrate_email_templates_if_needed(PDO $pdo): void {
     $intro    = ($rows['email_intro']    ?? '') ?: 'Grazie per i tuoi acquisti. Ecco i regali che abbiamo riservato per te:';
     $colore   = ($rows['email_color']    ?? '') ?: '#D64545';
 
-    $body_html = '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #eee;">'
-        . '<div style="text-align:center;">{{logo}}</div>'
-        . '<h2 style="color:#2d3142;text-align:center;">' . h($greeting) . '</h2>'
-        . '<p style="text-align:center;color:#4f5d75;">' . h($intro) . '</p>'
-        . '{{items}}'
-        . '<p style="font-size:11px;color:#aaa;text-align:center;margin-top:30px;">&copy; {{anno}} {{business_name}}</p>'
-        . '</div>';
+    // Stessi blocchi usati da default_email_blocks(), ma con i testi
+    // ereditati dai vecchi campi: il template migrato resta modificabile
+    // nell'editor visivo, non solo in modalità codice.
+    $blocks = [
+        ['type' => 'logo', 'align' => 'center'],
+        ['type' => 'heading', 'text' => $greeting, 'align' => 'center'],
+        ['type' => 'text', 'text' => $intro, 'align' => 'center'],
+        ['type' => 'gift_box', 'label' => "Per l'evento:", 'button_text' => 'Usa Sconto'],
+        ['type' => 'footer', 'text' => '© {{anno}} {{business_name}}'],
+    ];
+    $rendered = render_blocks_to_html($blocks, $colore);
 
-    $item_html = '<div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;margin-bottom:15px;border-radius:8px;text-align:center;">'
-        . '<p style="color:#666;font-size:13px;margin:0;">Per l\'evento: <b>{{desc}}</b></p>'
-        . '<p style="color:{{colore}};font-size:24px;font-weight:bold;margin:10px 0;">{{code}}</p>'
-        . '<a href="{{url}}" style="display:inline-block;background:{{colore}};color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Usa Sconto {{label}}</a>'
-        . '</div>';
-
-    $pdo->prepare('INSERT INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default) VALUES (?,?,?,?,?,?,1)')
-        ->execute(['it', 'Italiano', $subject, $colore, $body_html, $item_html]);
+    $pdo->prepare('INSERT INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json) VALUES (?,?,?,?,?,?,1,?)')
+        ->execute(['it', 'Italiano', $subject, $colore, $rendered['body_html'], $rendered['item_html'], json_encode($blocks, JSON_UNESCAPED_UNICODE)]);
 
     write_log('Creato template email "Italiano" (migrazione automatica dai campi precedenti).');
 }
@@ -434,9 +433,10 @@ function replace_all_regole(array $regole): void {
 // nulla. Ogni template è HTML libero con segnaposto, non solo testo fisso.
 
 function load_email_templates(): array {
-    $rows = db()->query('SELECT lingua, nome, subject, colore, body_html, item_html, is_default FROM email_templates ORDER BY lingua')->fetchAll(PDO::FETCH_ASSOC);
+    $rows = db()->query('SELECT lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json FROM email_templates ORDER BY lingua')->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     foreach ($rows as $r) {
+        $blocks = $r['blocks_json'] ? json_decode($r['blocks_json'], true) : null;
         $out[$r['lingua']] = [
             'nome'       => $r['nome'],
             'subject'    => $r['subject'],
@@ -444,6 +444,9 @@ function load_email_templates(): array {
             'body_html'  => $r['body_html'],
             'item_html'  => $r['item_html'],
             'is_default' => (bool)$r['is_default'],
+            // null = template "a codice" (HTML scritto/modificato a mano,
+            // non più ricostruibile nell'editor a blocchi).
+            'blocks'     => is_array($blocks) ? $blocks : null,
         ];
     }
     return $out;
@@ -452,14 +455,18 @@ function load_email_templates(): array {
 /**
  * Salva un template email (crea o sovrascrive). Se marcato come
  * predefinito, toglie il flag a tutti gli altri: ce n'è sempre al più uno.
+ * $tpl['blocks'] è opzionale: se presente (array), il template resta
+ * modificabile nell'editor visivo a blocchi; se assente/null, il template
+ * è considerato "a codice" (body_html/item_html scritti a mano).
  */
 function save_email_template(string $lingua, array $tpl): void {
     db_atomic(function (PDO $pdo) use ($lingua, $tpl) {
         if (!empty($tpl['is_default'])) {
             $pdo->exec('UPDATE email_templates SET is_default = 0');
         }
-        $pdo->prepare('INSERT OR REPLACE INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default) VALUES (?,?,?,?,?,?,?)')
-            ->execute([$lingua, $tpl['nome'], $tpl['subject'], $tpl['colore'], $tpl['body_html'], $tpl['item_html'], !empty($tpl['is_default']) ? 1 : 0]);
+        $blocks_json = isset($tpl['blocks']) && is_array($tpl['blocks']) ? json_encode($tpl['blocks'], JSON_UNESCAPED_UNICODE) : null;
+        $pdo->prepare('INSERT OR REPLACE INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json) VALUES (?,?,?,?,?,?,?,?)')
+            ->execute([$lingua, $tpl['nome'], $tpl['subject'], $tpl['colore'], $tpl['body_html'], $tpl['item_html'], !empty($tpl['is_default']) ? 1 : 0, $blocks_json]);
     });
 }
 
@@ -480,6 +487,139 @@ function get_email_template(?string $lingua): ?array {
         if ($t['is_default']) return $t;
     }
     return $templates ? reset($templates) : null;
+}
+
+/** Blocchi di partenza per un nuovo template creato nell'editor visivo. */
+function default_email_blocks(): array {
+    return [
+        ['type' => 'logo', 'align' => 'center'],
+        ['type' => 'heading', 'text' => 'Ciao {{nome}}!', 'align' => 'center'],
+        ['type' => 'text', 'text' => 'Grazie per i tuoi acquisti. Ecco i regali che abbiamo riservato per te:', 'align' => 'center'],
+        ['type' => 'gift_box', 'label' => "Per l'evento:", 'button_text' => 'Usa Sconto'],
+        ['type' => 'footer', 'text' => '© {{anno}} {{business_name}}'],
+    ];
+}
+
+const EMAIL_BLOCK_TYPES = ['logo', 'heading', 'text', 'gift_box', 'divider', 'spacer', 'footer'];
+
+/**
+ * Valida/normalizza un array di blocchi arrivato dal client (editor
+ * visivo): scarta blocchi con tipo sconosciuto, applica limiti di
+ * lunghezza/valori sensati, tiene solo il primo blocco "gift_box" (un solo
+ * blocco sconto ha senso: è lì che va il ciclo dei codici regalo).
+ */
+function sanitize_email_blocks(array $raw_blocks): array {
+    $blocks = [];
+    $has_gift_box = false;
+    foreach (array_slice($raw_blocks, 0, 40) as $b) {
+        if (!is_array($b)) continue;
+        $type = $b['type'] ?? '';
+        if (!in_array($type, EMAIL_BLOCK_TYPES, true)) continue;
+        if ($type === 'gift_box') {
+            if ($has_gift_box) continue; // un solo blocco sconto per template
+            $has_gift_box = true;
+        }
+        $align_raw = $b['align'] ?? 'center';
+        $align = in_array($align_raw, ['left', 'center', 'right'], true) ? $align_raw : 'center';
+        $color_raw = $b['color'] ?? '';
+        $color = preg_match('/^#[0-9a-fA-F]{6}$/', $color_raw) ? $color_raw : '';
+        switch ($type) {
+            case 'logo':
+                $blocks[] = ['type' => 'logo', 'align' => $align];
+                break;
+            case 'heading':
+                $blocks[] = ['type' => 'heading', 'text' => mb_substr((string)($b['text'] ?? ''), 0, 200), 'align' => $align, 'color' => $color];
+                break;
+            case 'text':
+                $blocks[] = ['type' => 'text', 'text' => mb_substr((string)($b['text'] ?? ''), 0, 1000), 'align' => $align, 'color' => $color];
+                break;
+            case 'gift_box':
+                $blocks[] = [
+                    'type'        => 'gift_box',
+                    'label'       => mb_substr((string)($b['label'] ?? "Per l'evento:"), 0, 100),
+                    'button_text' => mb_substr((string)($b['button_text'] ?? 'Usa Sconto'), 0, 60),
+                ];
+                break;
+            case 'divider':
+                $blocks[] = ['type' => 'divider'];
+                break;
+            case 'spacer':
+                $blocks[] = ['type' => 'spacer', 'height' => max(4, min(120, (int)($b['height'] ?? 20)))];
+                break;
+            case 'footer':
+                $blocks[] = ['type' => 'footer', 'text' => mb_substr((string)($b['text'] ?? ''), 0, 300)];
+                break;
+        }
+    }
+    return $blocks;
+}
+
+/**
+ * Converte i blocchi dell'editor visivo in body_html/item_html, lo stesso
+ * formato consumato da render_email_template(): niente doppio motore di
+ * rendering, i blocchi sono solo un modo più semplice di scrivere lo
+ * stesso HTML. Se non c'è un blocco "gift_box", ne viene aggiunto uno di
+ * default in coda: un template non può mai restare senza il punto in cui
+ * mostrare i codici sconto.
+ */
+function render_blocks_to_html(array $blocks, string $colore): array {
+    $colore = preg_match('/^#[0-9a-fA-F]{6}$/', $colore) ? $colore : '#D64545';
+    $parts = [];
+    $item_html = null;
+
+    foreach ($blocks as $b) {
+        switch ($b['type'] ?? '') {
+            case 'logo':
+                $parts[] = '<div style="text-align:' . h($b['align'] ?? 'center') . ';margin-bottom:20px;">{{logo}}</div>';
+                break;
+            case 'heading':
+                $color = ($b['color'] ?? '') ?: '#2d3142';
+                $parts[] = '<h2 style="color:' . h($color) . ';text-align:' . h($b['align'] ?? 'center') . ';margin:0 0 14px;">' . h((string)($b['text'] ?? '')) . '</h2>';
+                break;
+            case 'text':
+                $color = ($b['color'] ?? '') ?: '#4f5d75';
+                $parts[] = '<p style="color:' . h($color) . ';text-align:' . h($b['align'] ?? 'center') . ';margin:0 0 18px;">' . nl2br(h((string)($b['text'] ?? ''))) . '</p>';
+                break;
+            case 'gift_box':
+                if ($item_html !== null) break; // solo il primo conta
+                $parts[] = '{{items}}';
+                $label = h((string)($b['label'] ?? "Per l'evento:"));
+                $btn   = h((string)($b['button_text'] ?? 'Usa Sconto'));
+                $item_html = '<div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;margin-bottom:15px;border-radius:8px;text-align:center;">'
+                    . '<p style="color:#666;font-size:13px;margin:0;">' . $label . ' <b>{{desc}}</b></p>'
+                    . '<p style="color:{{colore}};font-size:24px;font-weight:bold;margin:10px 0;">{{code}}</p>'
+                    . '<a href="{{url}}" style="display:inline-block;background:{{colore}};color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">' . $btn . ' {{label}}</a>'
+                    . '</div>';
+                break;
+            case 'divider':
+                $parts[] = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">';
+                break;
+            case 'spacer':
+                $height = max(0, (int)($b['height'] ?? 20));
+                $parts[] = '<div style="height:' . $height . 'px;line-height:' . $height . 'px;font-size:1px;">&nbsp;</div>';
+                break;
+            case 'footer':
+                $parts[] = '<p style="font-size:11px;color:#aaa;text-align:center;margin-top:30px;">' . h((string)($b['text'] ?? '')) . '</p>';
+                break;
+        }
+    }
+
+    if ($item_html === null) {
+        // Nessun blocco "gift_box" nell'editor: non deve mai risultare un
+        // template senza spazio per i codici sconto, quindi lo aggiungiamo.
+        $parts[] = '{{items}}';
+        $item_html = '<div style="background:#f3f3f3;border:1px solid #ddd;padding:15px;margin-bottom:15px;border-radius:8px;text-align:center;">'
+            . '<p style="color:#666;font-size:13px;margin:0;">Per l\'evento: <b>{{desc}}</b></p>'
+            . '<p style="color:{{colore}};font-size:24px;font-weight:bold;margin:10px 0;">{{code}}</p>'
+            . '<a href="{{url}}" style="display:inline-block;background:{{colore}};color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Usa Sconto {{label}}</a>'
+            . '</div>';
+    }
+
+    $body_html = '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #eee;">'
+        . implode('', $parts)
+        . '</div>';
+
+    return ['body_html' => $body_html, 'item_html' => $item_html];
 }
 
 /**
