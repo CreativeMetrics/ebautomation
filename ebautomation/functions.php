@@ -83,6 +83,7 @@ function ensure_schema(PDO $pdo): void {
     // "ADD COLUMN IF NOT EXISTS", quindi controlliamo prima via PRAGMA).
     add_column_if_missing($pdo, 'users', 'role', "TEXT NOT NULL DEFAULT 'admin'");
     add_column_if_missing($pdo, 'email_templates', 'blocks_json', 'TEXT');
+    add_column_if_missing($pdo, 'email_templates', 'logo_width', 'INTEGER DEFAULT 150');
 }
 
 // NB: $table/$column/$definition vanno interpolati direttamente nell'SQL
@@ -245,7 +246,7 @@ function migrate_email_templates_if_needed(PDO $pdo): void {
     // ereditati dai vecchi campi: il template migrato resta modificabile
     // nell'editor visivo, non solo in modalità codice.
     $blocks = [
-        ['type' => 'logo', 'align' => 'center'],
+        ['type' => 'logo', 'align' => 'center', 'width' => 150],
         ['type' => 'heading', 'text' => $greeting, 'align' => 'center'],
         ['type' => 'text', 'text' => $intro, 'align' => 'center'],
         ['type' => 'gift_box', 'label' => "Per l'evento:", 'button_text' => 'Usa Sconto'],
@@ -253,8 +254,8 @@ function migrate_email_templates_if_needed(PDO $pdo): void {
     ];
     $rendered = render_blocks_to_html($blocks, $colore);
 
-    $pdo->prepare('INSERT INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json) VALUES (?,?,?,?,?,?,1,?)')
-        ->execute(['it', 'Italiano', $subject, $colore, $rendered['body_html'], $rendered['item_html'], json_encode($blocks, JSON_UNESCAPED_UNICODE)]);
+    $pdo->prepare('INSERT INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json, logo_width) VALUES (?,?,?,?,?,?,1,?,?)')
+        ->execute(['it', 'Italiano', $subject, $colore, $rendered['body_html'], $rendered['item_html'], json_encode($blocks, JSON_UNESCAPED_UNICODE), $rendered['logo_width']]);
 
     write_log('Creato template email "Italiano" (migrazione automatica dai campi precedenti).');
 }
@@ -433,7 +434,7 @@ function replace_all_regole(array $regole): void {
 // nulla. Ogni template è HTML libero con segnaposto, non solo testo fisso.
 
 function load_email_templates(): array {
-    $rows = db()->query('SELECT lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json FROM email_templates ORDER BY lingua')->fetchAll(PDO::FETCH_ASSOC);
+    $rows = db()->query('SELECT lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json, logo_width FROM email_templates ORDER BY lingua')->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     foreach ($rows as $r) {
         $blocks = $r['blocks_json'] ? json_decode($r['blocks_json'], true) : null;
@@ -447,6 +448,7 @@ function load_email_templates(): array {
             // null = template "a codice" (HTML scritto/modificato a mano,
             // non più ricostruibile nell'editor a blocchi).
             'blocks'     => is_array($blocks) ? $blocks : null,
+            'logo_width' => (int)($r['logo_width'] ?: 150),
         ];
     }
     return $out;
@@ -465,8 +467,9 @@ function save_email_template(string $lingua, array $tpl): void {
             $pdo->exec('UPDATE email_templates SET is_default = 0');
         }
         $blocks_json = isset($tpl['blocks']) && is_array($tpl['blocks']) ? json_encode($tpl['blocks'], JSON_UNESCAPED_UNICODE) : null;
-        $pdo->prepare('INSERT OR REPLACE INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json) VALUES (?,?,?,?,?,?,?,?)')
-            ->execute([$lingua, $tpl['nome'], $tpl['subject'], $tpl['colore'], $tpl['body_html'], $tpl['item_html'], !empty($tpl['is_default']) ? 1 : 0, $blocks_json]);
+        $logo_width  = max(40, min(400, (int)($tpl['logo_width'] ?? 150)));
+        $pdo->prepare('INSERT OR REPLACE INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json, logo_width) VALUES (?,?,?,?,?,?,?,?,?)')
+            ->execute([$lingua, $tpl['nome'], $tpl['subject'], $tpl['colore'], $tpl['body_html'], $tpl['item_html'], !empty($tpl['is_default']) ? 1 : 0, $blocks_json, $logo_width]);
     });
 }
 
@@ -492,7 +495,7 @@ function get_email_template(?string $lingua): ?array {
 /** Blocchi di partenza per un nuovo template creato nell'editor visivo. */
 function default_email_blocks(): array {
     return [
-        ['type' => 'logo', 'align' => 'center'],
+        ['type' => 'logo', 'align' => 'center', 'width' => 150],
         ['type' => 'heading', 'text' => 'Ciao {{nome}}!', 'align' => 'center'],
         ['type' => 'text', 'text' => 'Grazie per i tuoi acquisti. Ecco i regali che abbiamo riservato per te:', 'align' => 'center'],
         ['type' => 'gift_box', 'label' => "Per l'evento:", 'button_text' => 'Usa Sconto'],
@@ -525,7 +528,7 @@ function sanitize_email_blocks(array $raw_blocks): array {
         $color = preg_match('/^#[0-9a-fA-F]{6}$/', $color_raw) ? $color_raw : '';
         switch ($type) {
             case 'logo':
-                $blocks[] = ['type' => 'logo', 'align' => $align];
+                $blocks[] = ['type' => 'logo', 'align' => $align, 'width' => max(40, min(400, (int)($b['width'] ?? 150)))];
                 break;
             case 'heading':
                 $blocks[] = ['type' => 'heading', 'text' => mb_substr((string)($b['text'] ?? ''), 0, 200), 'align' => $align, 'color' => $color];
@@ -566,10 +569,12 @@ function render_blocks_to_html(array $blocks, string $colore): array {
     $colore = preg_match('/^#[0-9a-fA-F]{6}$/', $colore) ? $colore : '#D64545';
     $parts = [];
     $item_html = null;
+    $logo_width = 150;
 
     foreach ($blocks as $b) {
         switch ($b['type'] ?? '') {
             case 'logo':
+                $logo_width = max(40, min(400, (int)($b['width'] ?? 150)));
                 $parts[] = '<div style="text-align:' . h($b['align'] ?? 'center') . ';margin-bottom:20px;">{{logo}}</div>';
                 break;
             case 'heading':
@@ -619,7 +624,7 @@ function render_blocks_to_html(array $blocks, string $colore): array {
         . implode('', $parts)
         . '</div>';
 
-    return ['body_html' => $body_html, 'item_html' => $item_html];
+    return ['body_html' => $body_html, 'item_html' => $item_html, 'logo_width' => $logo_width];
 }
 
 /**
@@ -631,9 +636,16 @@ function render_blocks_to_html(array $blocks, string $colore): array {
  * Segnaposto nel corpo: {{business_name}} {{nome}} {{items}} {{anno}} {{logo}} {{colore}}
  * Segnaposto per singolo sconto (item_html, concatenati in {{items}}):
  * {{desc}} {{code}} {{url}} {{label}} {{colore}}
+ *
+ * $logo_src distingue invio reale da anteprima: nell'email vera il logo va
+ * incorporato come allegato e richiamato con "cid:logo_cid" (i client email
+ * bloccano di default le immagini remote), ma un browser non sa risolvere
+ * un cid — per le anteprime lato dashboard va quindi passato un URL reale
+ * (es. "logo.png?v=..."), altrimenti l'immagine risulta rotta.
  */
-function render_email_template(array $template, string $business_name, string $nome_cliente, array $regali_finali, bool $has_logo): array {
-    $colore = $template['colore'] ?: '#D64545';
+function render_email_template(array $template, string $business_name, string $nome_cliente, array $regali_finali, bool $has_logo, string $logo_src = 'cid:logo_cid'): array {
+    $colore     = $template['colore'] ?: '#D64545';
+    $logo_width = max(40, min(400, (int)($template['logo_width'] ?? 150)));
 
     $items_html = '';
     foreach ($regali_finali as $reg) {
@@ -647,7 +659,7 @@ function render_email_template(array $template, string $business_name, string $n
     }
 
     $logo_html = $has_logo
-        ? '<img src="cid:logo_cid" style="max-width:150px;margin-bottom:20px;">'
+        ? '<img src="' . h($logo_src) . '" style="max-width:' . $logo_width . 'px;height:auto;margin-bottom:20px;">'
         : '<h1 style="color:#2d3142;">' . h($business_name) . '</h1>';
 
     $html = strtr((string)($template['body_html'] ?? ''), [

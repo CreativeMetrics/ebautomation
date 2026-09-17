@@ -183,7 +183,10 @@ if (($_GET['action'] ?? '') === 'preview_email_template') {
         exit;
     }
     $preview_logo = file_exists(__DIR__ . '/logo.png');
-    $preview = render_email_template($preview_template, $conf['business_name'] ?: 'La nostra Azienda', 'Mario', sample_regali_finali(), $preview_logo);
+    // In un browser "cid:" (usato per l'invio reale, dove il logo è un
+    // allegato incorporato) non risolve a nulla: qui serve un URL vero.
+    $preview_logo_src = $preview_logo ? 'logo.png?v=' . filemtime(__DIR__ . '/logo.png') : '';
+    $preview = render_email_template($preview_template, $conf['business_name'] ?: 'La nostra Azienda', 'Mario', sample_regali_finali(), $preview_logo, $preview_logo_src);
     echo $preview['html'];
     exit;
 }
@@ -367,12 +370,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $rendered   = render_blocks_to_html($blocks, $colore);
                 $body_html  = $rendered['body_html'];
                 $item_html  = $rendered['item_html'];
+                $logo_width = $rendered['logo_width'];
             } else {
                 // Modalità codice: HTML scritto a mano, il template non è
                 // più ricostruibile nell'editor a blocchi (blocks = null).
-                $blocks    = null;
-                $body_html = (string)($_POST['body_html'] ?? '');
-                $item_html = (string)($_POST['item_html'] ?? '');
+                $blocks     = null;
+                $body_html  = (string)($_POST['body_html'] ?? '');
+                $item_html  = (string)($_POST['item_html'] ?? '');
+                $logo_width = 150;
             }
 
             save_email_template($lingua, [
@@ -383,6 +388,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'item_html'  => $item_html,
                 'is_default' => !empty($_POST['is_default']),
                 'blocks'     => $blocks,
+                'logo_width' => $logo_width,
             ]);
             audit_log('Template email salvato', $lingua);
             $_SESSION['flash_ok'] = "Template \"$lingua\" salvato.";
@@ -399,9 +405,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pb_blocks     = sanitize_email_blocks(is_array($pb_raw_blocks) ? $pb_raw_blocks : []);
             $pb_colore     = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['colore'] ?? '') ? $_POST['colore'] : '#D64545';
             $pb_rendered   = render_blocks_to_html($pb_blocks, $pb_colore);
-            $pb_template   = ['colore' => $pb_colore, 'body_html' => $pb_rendered['body_html'], 'item_html' => $pb_rendered['item_html']];
+            $pb_template   = ['colore' => $pb_colore, 'body_html' => $pb_rendered['body_html'], 'item_html' => $pb_rendered['item_html'], 'logo_width' => $pb_rendered['logo_width']];
             $pb_has_logo   = file_exists(__DIR__ . '/logo.png');
-            $pb_preview    = render_email_template($pb_template, $conf['business_name'] ?: 'La nostra Azienda', 'Mario', sample_regali_finali(), $pb_has_logo);
+            $pb_logo_src   = $pb_has_logo ? 'logo.png?v=' . filemtime(__DIR__ . '/logo.png') : '';
+            $pb_preview    = render_email_template($pb_template, $conf['business_name'] ?: 'La nostra Azienda', 'Mario', sample_regali_finali(), $pb_has_logo, $pb_logo_src);
             echo $pb_preview['html'];
             exit;
 
@@ -1262,7 +1269,7 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
 
             function newBlock(type) {
                 switch (type) {
-                    case 'logo':     return { type: 'logo', align: 'center' };
+                    case 'logo':     return { type: 'logo', align: 'center', width: 150 };
                     case 'heading':  return { type: 'heading', text: 'Ciao {{nome}}!', align: 'center', color: '#2d3142' };
                     case 'text':     return { type: 'text', text: 'Scrivi qui il tuo testo…', align: 'center', color: '#4f5d75' };
                     case 'gift_box': return { type: 'gift_box', label: "Per l'evento:", button_text: 'Usa Sconto' };
@@ -1275,7 +1282,9 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
             function blockFields(b, i) {
                 switch (b.type) {
                     case 'logo':
-                        return '<div class="field-row">' + alignSelect(b, i) + '</div>';
+                        return '<div class="field-row">' + alignSelect(b, i)
+                            + '<input type="number" data-f="width" data-i="' + i + '" value="' + (b.width || 150) + '" min="40" max="400" step="10" style="max-width:120px;flex:none;" title="Larghezza in pixel"></div>'
+                            + '<span class="tip">Larghezza in pixel (40–400). L\'altezza si adatta da sola per mantenere le proporzioni originali dell\'immagine.</span>';
                     case 'heading':
                         return '<div class="field-row"><input type="text" data-f="text" data-i="' + i + '" value="' + escAttr(b.text || '') + '" placeholder="Ciao {{nome}}!" maxlength="200"></div>'
                             + '<div class="field-row">' + alignSelect(b, i) + '<input type="color" data-f="color" data-i="' + i + '" value="' + (b.color || '#2d3142') + '" title="Colore testo"></div>';
