@@ -104,6 +104,10 @@ check(strpos($preview_render['html'], 'src="logo.png?v=42"') !== false, 'render_
 check(strpos($preview_render['html'], 'cid:') === false, 'render_email_template non lascia "cid:" residuo quando si passa un $logo_src esplicito', $failures);
 check(strpos($preview_render['html'], 'max-width:220px') !== false, 'render_email_template applica la larghezza del template al logo', $failures);
 check(strpos($preview_render['html'], 'height:auto') !== false, 'render_email_template mantiene le proporzioni del logo (height:auto)', $failures);
+// L'attributo HTML width (non solo lo style CSS) è necessario perché
+// alcuni client email (Outlook desktop in primis) ignorano max-width nel
+// CSS e mostrerebbero il logo alla dimensione originale.
+check(strpos($preview_render['html'], 'width="220"') !== false, 'render_email_template imposta anche l\'attributo HTML width, letto dai client email che ignorano il CSS', $failures);
 
 $send_render = render_email_template($logo_tpl, 'Azienda', 'Mario', [], true);
 check(strpos($send_render['html'], 'cid:logo_cid') !== false, 'render_email_template usa "cid:logo_cid" di default (invio reale, logo incorporato)', $failures);
