@@ -47,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             save_config($updated);
             audit_log('Configurazione salvata');
-            header('Location: dashboard.php?tab=config&msg=ok');
+            header('Location: dashboard.php?tab=connessioni&msg=ok');
             exit;
 
         case 'change_own_password':
@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['flash_ok'] = 'Password aggiornata.';
                 }
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=utenti');
             exit;
 
         case 'add_user':
@@ -81,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit_log('Utente creato', "$new_uname ($new_role)");
                 $_SESSION['flash_ok'] = "Utente \"$new_uname\" creato.";
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=utenti');
             exit;
 
         case 'delete_user':
@@ -98,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit_log('Utente eliminato', $del_uname);
                 $_SESSION['flash_ok'] = "Utente \"$del_uname\" eliminato.";
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=utenti');
             exit;
 
         case 'toggle_user_role':
@@ -116,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit_log('Ruolo utente cambiato', "$t_uname → $new_role");
                 $_SESSION['flash_ok'] = "Ruolo di \"$t_uname\" cambiato in $new_role.";
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=utenti');
             exit;
 
         case 'toggle_pause':
@@ -124,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             save_config($conf);
             audit_log($conf['paused'] ? 'Automazioni messe in pausa' : 'Automazioni riattivate');
             $_SESSION['flash_ok'] = $conf['paused'] ? 'Automazioni messe in pausa.' : 'Automazioni riattivate.';
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=connessioni');
             exit;
 
         case 'test_smtp':
@@ -134,7 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $to = trim($_POST['test_email'] ?? $conf['smtp_user']);
             if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
                 $_SESSION['flash_error'] = 'Indirizzo email non valido.';
-                header('Location: dashboard.php?tab=config');
+                header('Location: dashboard.php?tab=connessioni');
                 exit;
             }
             require_once APP_DIR . '/PHPMailer/Exception.php';
@@ -161,14 +161,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (MailException $e) {
                 $_SESSION['flash_error'] = 'Errore SMTP: ' . $mail->ErrorInfo;
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=connessioni');
             exit;
 
         case 'save_email_template':
             $lingua = trim($_POST['lingua'] ?? '');
             if (!preg_match('/^[a-zA-Z0-9_-]{1,10}$/', $lingua)) {
                 $_SESSION['flash_error'] = 'Codice lingua non valido: usa 1-10 caratteri (lettere, numeri, _ -), es. "it", "en".';
-                header('Location: dashboard.php?tab=config');
+                header('Location: dashboard.php?tab=template');
                 exit;
             }
             $colore      = preg_match('/^#[0-9a-fA-F]{6}$/', $_POST['colore'] ?? '') ? $_POST['colore'] : '#D64545';
@@ -202,7 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
             audit_log('Template email salvato', $lingua);
             $_SESSION['flash_ok'] = "Template \"$lingua\" salvato.";
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=template');
             exit;
 
         case 'preview_blocks':
@@ -241,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit_log('Template email eliminato', $lingua);
                 $_SESSION['flash_ok'] = "Template \"$lingua\" eliminato.";
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=template');
             exit;
 
         case 'test_email_template':
@@ -249,13 +249,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $to     = trim($_POST['test_email'] ?? $conf['smtp_user']);
             if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
                 $_SESSION['flash_error'] = 'Indirizzo email non valido.';
-                header('Location: dashboard.php?tab=config');
+                header('Location: dashboard.php?tab=template');
                 exit;
             }
             $template = get_email_template($lingua ?: null);
             if (!$template) {
                 $_SESSION['flash_error'] = 'Nessun template disponibile da testare.';
-                header('Location: dashboard.php?tab=config');
+                header('Location: dashboard.php?tab=template');
                 exit;
             }
             require_once APP_DIR . '/PHPMailer/Exception.php';
@@ -287,7 +287,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (MailException $e) {
                 $_SESSION['flash_error'] = 'Errore SMTP: ' . $mail->ErrorInfo;
             }
-            header('Location: dashboard.php?tab=config');
+            header('Location: dashboard.php?tab=template');
             exit;
 
         case 'regenerate_token':
@@ -295,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             save_config($conf);
             audit_log('Token webhook rigenerato');
             $_SESSION['flash_ok'] = 'Nuovo token generato. Aggiorna subito l\'URL su Eventbrite.';
-            header('Location: dashboard.php?tab=guida');
+            header('Location: dashboard.php?tab=connessioni');
             exit;
 
         case 'save_regola':
@@ -407,13 +407,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $_SESSION['flash_error'] = 'Nessun file selezionato.';
             }
-            header('Location: dashboard.php?tab=guida');
+            header('Location: dashboard.php?tab=strumenti');
             exit;
 
         case 'import_regole_csv':
             if (!isset($_FILES['regole_csv']) || $_FILES['regole_csv']['error'] !== UPLOAD_ERR_OK) {
                 $_SESSION['flash_error'] = 'Nessun file selezionato.';
-                header('Location: dashboard.php?tab=guida');
+                header('Location: dashboard.php?tab=strumenti');
                 exit;
             }
             $fh = fopen($_FILES['regole_csv']['tmp_name'], 'r');
@@ -423,7 +423,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $header_norm = $header ? array_map('trim', $header) : [];
             if ($header_norm !== $expected_header && $header_norm !== $expected_header_old) {
                 $_SESSION['flash_error'] = 'Intestazione CSV non valida. Usa un file esportato da questa dashboard (' . implode(',', $expected_header) . ').';
-                header('Location: dashboard.php?tab=guida');
+                header('Location: dashboard.php?tab=strumenti');
                 exit;
             }
             $has_lingua_col = $header_norm === $expected_header;
@@ -463,14 +463,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit_log('Regole importate da CSV', count($imported_csv) . ' regole');
                 $_SESSION['flash_ok'] = 'Importate ' . count($imported_csv) . ' regole da CSV con successo.';
             }
-            header('Location: dashboard.php?tab=guida');
+            header('Location: dashboard.php?tab=strumenti');
             exit;
 
         case 'simulate_webhook':
             $order_id_sim = preg_replace('/[^0-9]/', '', $_POST['sim_order_id'] ?? '');
             if (!$order_id_sim) {
                 $_SESSION['flash_error'] = 'Inserisci un Order ID numerico valido.';
-                header('Location: dashboard.php?tab=guida');
+                header('Location: dashboard.php?tab=strumenti');
                 exit;
             }
             $sim_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
@@ -495,7 +495,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $_SESSION['flash_error'] = "Simulazione fallita (HTTP $sim_status). Controlla token webhook e configurazione.";
             }
-            header('Location: dashboard.php?tab=guida');
+            header('Location: dashboard.php?tab=strumenti');
             exit;
 
         case 'retry_failed_orders':

@@ -188,7 +188,7 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
                     <div class="step-num">1</div>
                     <div class="step-body">
                         <strong>Configura Token API ed SMTP</strong>
-                        <p>Nella tab Configurazione: inserisci il Private Token Eventbrite, l'Organization ID e le credenziali SMTP per l'invio email.</p>
+                        <p>Nella tab Connessioni: inserisci il Private Token Eventbrite, l'Organization ID e le credenziali SMTP per l'invio email.</p>
                     </div>
                 </div>
                 <div class="step">
@@ -210,7 +210,7 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
                     <div class="step-num">4</div>
                     <div class="step-body">
                         <strong>Verifica con la Simulazione</strong>
-                        <p>Nella tab Guida & Help → Simulazione Webhook: inserisci un Order ID reale di Eventbrite per testare l'intero flusso (fetch ordine → creazione sconto → invio email) senza aspettare un acquisto.</p>
+                        <p>Nella tab Strumenti → Simulazione Webhook: inserisci un Order ID reale di Eventbrite per testare l'intero flusso (fetch ordine → creazione sconto → invio email) senza aspettare un acquisto.</p>
                     </div>
                 </div>
                 <div class="step">

@@ -97,10 +97,13 @@ if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
     <?php if ($conf['paused']): ?><div class="pause-banner">⏸ AUTOMAZIONI IN PAUSA</div><?php endif; ?>
     <?php if (!$is_admin): ?><div class="pause-banner" style="background:#64748b;color:white;">👁 SOLA LETTURA</div><?php endif; ?>
     <nav>
-        <a href="?tab=sconti" class="<?= $active_tab==='sconti'?'active':'' ?>">🎁 Regole Sconti</a>
-        <a href="?tab=config" class="<?= $active_tab==='config'?'active':'' ?>">⚙️ Configurazione</a>
-        <a href="?tab=log"    class="<?= $active_tab==='log'   ?'active':'' ?>">📋 Log Webhook<?php if ($today_errors > 0): ?><span class="badge-nav"><?= $today_errors ?></span><?php endif; ?></a>
-        <a href="?tab=guida"  class="<?= $active_tab==='guida' ?'active':'' ?>">📖 Guida & Help</a>
+        <a href="?tab=sconti"       class="<?= $active_tab==='sconti'      ?'active':'' ?>">🎁 Regole Sconti</a>
+        <a href="?tab=connessioni"  class="<?= $active_tab==='connessioni' ?'active':'' ?>">🔌 Connessioni</a>
+        <a href="?tab=template"     class="<?= $active_tab==='template'    ?'active':'' ?>">✉️ Template Email</a>
+        <a href="?tab=utenti"       class="<?= $active_tab==='utenti'      ?'active':'' ?>">👥 Utenti & Accesso</a>
+        <a href="?tab=log"          class="<?= $active_tab==='log'         ?'active':'' ?>">📋 Log Webhook<?php if ($today_errors > 0): ?><span class="badge-nav"><?= $today_errors ?></span><?php endif; ?></a>
+        <a href="?tab=strumenti"    class="<?= $active_tab==='strumenti'   ?'active':'' ?>">🛠️ Strumenti</a>
+        <a href="?tab=guida"        class="<?= $active_tab==='guida'       ?'active':'' ?>">📖 Guida & Help</a>
         <a href="?logout=1" class="logout">🚪 Esci</a>
     </nav>
 </aside>
@@ -114,10 +117,16 @@ if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
     <?php
     if ($active_tab === 'sconti') {
         require __DIR__ . '/dashboard_view_sconti.php';
-    } elseif ($active_tab === 'config') {
-        require __DIR__ . '/dashboard_view_config.php';
+    } elseif ($active_tab === 'connessioni') {
+        require __DIR__ . '/dashboard_view_connessioni.php';
+    } elseif ($active_tab === 'template') {
+        require __DIR__ . '/dashboard_view_template.php';
+    } elseif ($active_tab === 'utenti') {
+        require __DIR__ . '/dashboard_view_utenti.php';
     } elseif ($active_tab === 'log') {
         require __DIR__ . '/dashboard_view_log.php';
+    } elseif ($active_tab === 'strumenti') {
+        require __DIR__ . '/dashboard_view_strumenti.php';
     } elseif ($active_tab === 'guida') {
         require __DIR__ . '/dashboard_view_guida.php';
     }

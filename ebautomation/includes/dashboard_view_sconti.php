@@ -114,7 +114,7 @@
                             <option value="<?= h($lingua) ?>" <?= ($edit_rule['lingua'] ?? '') === $lingua ? 'selected' : '' ?>><?= h($tpl['nome']) ?><?= $tpl['is_default'] ? ' (predefinito)' : '' ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <span class="tip">Determina il template email usato per comunicare gli sconti di questa regola. Gestisci i template nella sezione "Template Email" del tab Configurazione.</span>
+                    <span class="tip">Determina il template email usato per comunicare gli sconti di questa regola. Gestisci i template nella tab "Template Email".</span>
                 </div>
             </div>
             <div class="grid">

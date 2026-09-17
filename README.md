@@ -23,19 +23,19 @@ Applicazione PHP standalone, zero dipendenze esterne (nessun Composer/npm), pens
 1. **Carica la cartella `ebautomation/`** sul server (FTP, SSH + git clone, o pannello hosting). Non serve installare nulla: niente Composer, niente npm, PHPMailer è già incluso nel repo (`ebautomation/PHPMailer/`).
 2. **Verifica i permessi**: la cartella dev'essere scrivibile dal webserver (tipicamente `755`), perché al primo avvio crea da sola `database.sqlite`, `secret.php` (chiave di cifratura), `webhook_log.txt`, `backups/`.
 3. **Apri `dashboard.php` nel browser.** Se l'ambiente non è pronto (estensione PHP mancante, permessi sbagliati) l'app lo segnala con un messaggio comprensibile invece di un errore PHP grezzo. Altrimenti parte automaticamente il **wizard di setup**: nome azienda + password (minimo 10 caratteri) → crea l'utente `admin`, genera il token webhook, inizializza il database. Un solo passaggio, nessun file da editare a mano.
-4. **Configura Eventbrite e SMTP** (tab *Configurazione*):
+4. **Configura Eventbrite e SMTP** (tab *Connessioni*):
    - **Private Token API**: da eventbrite.com → Account → Impostazioni → Chiavi API
-   - **Organization ID**: mostrato nel tab *Guida* una volta inserito il token
+   - **Organization ID**: mostrato nel tab *Guida & Help* una volta inserito il token
    - **Credenziali SMTP** per l'invio email (host, porta, cifratura, utente, password)
-   - **Template email** (tab *Configurazione* → sezione *Template Email*): uno o più template, ciascuno associato a un codice lingua, con un **editor visivo a blocchi** (logo, titolo, testo, box sconto, divisore, spazio, piè di pagina) e anteprima live affiancata — non serve saper scrivere HTML. Chi preferisce il controllo completo può passare in qualsiasi momento alla modalità "Codice HTML". Uno è sempre marcato come predefinito; ogni regola sconto può scegliere quale template usare, altrimenti si usa il predefinito.
-5. **Registra il webhook su Eventbrite**: copia l'URL mostrato nel tab *Guida* (già completo di token) e incollalo su Eventbrite → Account → Webhook, selezionando gli eventi:
+   - **Template email** (tab *Template Email*, dedicata): uno o più template, ciascuno associato a un codice lingua, con un **editor visivo a blocchi** (logo, titolo, testo, box sconto, divisore, spazio, piè di pagina) e anteprima live affiancata — non serve saper scrivere HTML. Chi preferisce il controllo completo può passare in qualsiasi momento alla modalità "Codice HTML". Uno è sempre marcato come predefinito; ogni regola sconto può scegliere quale template usare, altrimenti si usa il predefinito.
+5. **Registra il webhook su Eventbrite**: copia l'URL mostrato nel tab *Guida & Help* (già completo di token) e incollalo su Eventbrite → Account → Webhook, selezionando gli eventi:
    - `order.placed`
    - `order.refunded`
    - `order.updated`
 6. **Crea le regole sconto** (tab *Regole Sconti*): per ogni evento trigger indichi uno o più eventi target a cui va generato il codice sconto, con percentuale o importo fisso, quantità di utilizzi, scadenza, quantità minima di biglietti trigger e template email/lingua da usare — tutti opzionali tranne trigger/target.
 7. **Verifica che tutto funzioni**:
-   - **Health Check** (tab *Guida*, anche in formato JSON per un monitor esterno: `dashboard.php?action=health&format=json`)
-   - **Simulazione Webhook** con un Order ID reale (tab *Guida*): testa l'intero flusso senza aspettare un acquisto vero
+   - **Health Check** (tab *Guida & Help*, anche in formato JSON per un monitor esterno: `dashboard.php?action=health&format=json`)
+   - **Simulazione Webhook** con un Order ID reale (tab *Strumenti*): testa l'intero flusso senza aspettare un acquisto vero
 
 ### Aggiornamento da un'installazione precedente
 
@@ -64,10 +64,13 @@ ebautomation/includes/       (require lato server da dashboard.php, mai accessib
 ├── dashboard_actions.php     Tutte le azioni POST (salva config/regole/template, utenti, retry, ecc.)
 ├── dashboard_data.php        Caricamento dati per la vista (regole, template, eventi Eventbrite, ecc.)
 ├── dashboard_layout.php      Scheletro HTML (head/sidebar) + smista alla vista della tab attiva
-├── dashboard_view_sconti.php   Tab "Regole Sconti"
-├── dashboard_view_config.php   Tab "Configurazione" (SMTP, Eventbrite, template email, utenti)
-├── dashboard_view_log.php      Tab "Log Webhook" (log, ordini falliti, audit log)
-└── dashboard_view_guida.php    Tab "Guida & Help" (health check, simulazione webhook, backup)
+├── dashboard_view_sconti.php       Tab "Regole Sconti"
+├── dashboard_view_connessioni.php  Tab "Connessioni" (pausa, Eventbrite, SMTP, webhook, test invio)
+├── dashboard_view_template.php     Tab "Template Email" (editor a blocchi, anteprima, invio di test)
+├── dashboard_view_utenti.php       Tab "Utenti & Accesso" (password personale, gestione utenti)
+├── dashboard_view_log.php          Tab "Log Webhook" (log, ordini falliti, audit log)
+├── dashboard_view_strumenti.php    Tab "Strumenti" (simulazione webhook, import/export regole, backup)
+└── dashboard_view_guida.php        Tab "Guida & Help" (istruzioni, organizzazioni, URL webhook)
 
 tests/
 ├── run.php                   Esegue tutti i casi in tests/cases/

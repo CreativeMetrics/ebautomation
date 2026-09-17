@@ -115,7 +115,7 @@ $brand = htmlspecialchars($conf['business_name'] ?: 'Dashboard', ENT_QUOTES, 'UT
 
         <div class="hint">
             Trovi il Private Token su <strong>eventbrite.com → Account → Impostazioni → Chiavi API</strong>.<br>
-            È lo stesso token inserito nella tab Configurazione della dashboard.
+            È lo stesso token inserito nella tab Connessioni della dashboard.
         </div>
 
         <form method="POST" autocomplete="off">

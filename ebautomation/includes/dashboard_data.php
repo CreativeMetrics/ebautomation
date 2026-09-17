@@ -4,7 +4,7 @@ if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
 // ── DATI ──────────────────────────────────────────────────────────────────────
 $conf       = load_config();
 $brand_name = $conf['business_name'] ?: 'Automazione Sconti';
-$active_tab = in_array($_GET['tab'] ?? '', ['sconti','config','log','guida']) ? $_GET['tab'] : 'sconti';
+$active_tab = in_array($_GET['tab'] ?? '', ['sconti','connessioni','template','utenti','log','strumenti','guida']) ? $_GET['tab'] : 'sconti';
 $regole          = load_regole();
 $email_templates = load_email_templates();
 $events          = [];

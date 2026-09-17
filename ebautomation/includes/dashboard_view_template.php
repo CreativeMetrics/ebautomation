@@ -1,73 +1,5 @@
 <?php if (!defined('EBAUTO_APP')) { http_response_code(403); exit; } ?>
 
-    <div class="card" style="border-top:4px solid <?= $conf['paused'] ? '#f59e0b' : '#10b981' ?>;">
-        <h2><?= $conf['paused'] ? '⏸ Automazioni in Pausa' : '▶ Automazioni Attive' ?></h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;"><?= $conf['paused'] ? 'I webhook vengono ricevuti ma ignorati. Nessuno sconto verrà creato.' : 'Tutto funziona normalmente. Metti in pausa per bloccare temporaneamente le automazioni.' ?></p>
-        <?php if ($is_admin): ?>
-        <form method="POST">
-            <input type="hidden" name="action"     value="toggle_pause">
-            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-            <button type="submit" class="<?= $conf['paused'] ? 'btn-success' : 'btn-warning' ?>">
-                <?= $conf['paused'] ? '▶ Riattiva Automazioni' : '⏸ Metti in Pausa' ?>
-            </button>
-        </form>
-        <?php endif; ?>
-    </div>
-
-    <?php if ($is_admin): ?>
-    <div class="card">
-        <h2>⚙️ Impostazioni</h2>
-        <form method="POST" enctype="multipart/form-data">
-            <input type="hidden" name="action"     value="save_config">
-            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-
-            <h3>Azienda</h3>
-            <div class="grid">
-                <div class="input-group"><label>Nome Brand</label><input type="text" name="business_name" value="<?= h($conf['business_name']) ?>"></div>
-                <div class="input-group"><label>Logo (PNG/JPG, max 2 MB)</label><input type="file" name="logo" accept="image/png,image/jpeg"></div>
-            </div>
-
-            <h3>Eventbrite</h3>
-            <div class="grid">
-                <div class="input-group"><label>Private Token</label><input type="password" name="api_token" value="<?= h($conf['api_token']) ?>"></div>
-                <div class="input-group"><label>Organization ID</label><input type="text" name="org_id" value="<?= h($conf['org_id']) ?>"></div>
-                <div class="input-group"><label>Valuta sconti fissi</label><input type="text" name="currency" value="<?= h($conf['currency']) ?>" maxlength="3" placeholder="EUR"></div>
-            </div>
-
-            <h3>SMTP</h3>
-            <div class="grid">
-                <div class="input-group"><label>Host</label><input type="text" name="smtp_host" value="<?= h($conf['smtp_host']) ?>"></div>
-                <div class="input-group">
-                    <label>Cifratura</label>
-                    <select name="smtp_encryption" onchange="syncPort(this.value)">
-                        <option value="smtps" <?= $conf['smtp_encryption']==='smtps'?'selected':'' ?>>SSL/TLS (porta 465)</option>
-                        <option value="tls"   <?= $conf['smtp_encryption']==='tls'  ?'selected':'' ?>>STARTTLS (porta 587)</option>
-                    </select>
-                </div>
-                <div class="input-group"><label>Porta</label><input type="text" name="smtp_port" id="smtp_port" value="<?= h($conf['smtp_port']) ?>"></div>
-                <div class="input-group"><label>Email</label><input type="email" name="smtp_user" value="<?= h($conf['smtp_user']) ?>"></div>
-                <div class="input-group"><label>Password SMTP</label><input type="password" name="smtp_pass" value="<?= h($conf['smtp_pass']) ?>"></div>
-            </div>
-
-            <h3>Notifiche Admin</h3>
-            <div class="grid">
-                <div class="input-group">
-                    <label>Email di alert</label>
-                    <input type="email" name="alert_email" value="<?= h($conf['alert_email']) ?>" placeholder="<?= h($conf['smtp_user'] ?: 'usa Email Mittente') ?>">
-                    <span class="tip">Se vuota, gli alert vanno all'Email Mittente SMTP.</span>
-                </div>
-                <div class="input-group">
-                    <label>Soglia errori/giorno</label>
-                    <input type="number" name="alert_threshold" value="<?= h((string)$conf['alert_threshold']) ?>" min="1" max="999">
-                    <span class="tip">Sopra questa soglia parte un'email di alert (max 1/ora).</span>
-                </div>
-            </div>
-
-            <button type="submit">Salva Configurazione</button>
-        </form>
-    </div>
-    <?php endif; ?>
-
     <div class="card">
         <h2>✉️ Template Email</h2>
         <p style="color:#64748b;font-size:14px;margin-top:0;">Uno o più template HTML completi, uno per lingua/variante visiva. Ogni regola sceglie quale usare (campo "Lingua Email"); chi non specifica nulla usa il predefinito.</p>
@@ -83,9 +15,9 @@
                     <td style="color:#64748b;"><?= h($tpl['subject']) ?></td>
                     <td><?= $tpl['is_default'] ? '<span style="color:#10b981;">✓ predefinito</span>' : '—' ?></td>
                     <td style="white-space:nowrap;">
-                        <a href="?tab=config&action=preview_email_template&lingua=<?= urlencode($lingua) ?>" target="_blank" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;" title="Anteprima in una nuova scheda">👁</a>
+                        <a href="?tab=template&action=preview_email_template&lingua=<?= urlencode($lingua) ?>" target="_blank" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;" title="Anteprima in una nuova scheda">👁</a>
                         <?php if ($is_admin): ?>
-                        <a href="?tab=config&edit_template=<?= urlencode($lingua) ?>#template-form" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;">✏</a>
+                        <a href="?tab=template&edit_template=<?= urlencode($lingua) ?>#template-form" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;">✏</a>
                         <?php if (count($email_templates) > 1): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare il template <?= h(addslashes($tpl['nome'])) ?>?')">
                             <input type="hidden" name="action" value="delete_email_template">
@@ -106,7 +38,7 @@
             <?php if ($edit_template): ?>
             <div class="edit-highlight-banner">
                 <span>✏️ Stai modificando il template <strong>«<?= h($edit_template['nome']) ?>»</strong> (codice <code style="display:inline;padding:1px 6px;background:rgba(0,0,0,0.06);"><?= h($edit_template_lingua) ?></code>)<?= $edit_template['is_default'] ? ' — è il template <strong>predefinito</strong>' : '' ?></span>
-                <a href="?tab=config#template-form">Annulla, crea un nuovo template</a>
+                <a href="?tab=template#template-form">Annulla, crea un nuovo template</a>
             </div>
             <?php endif; ?>
         <h3><?= $edit_template ? 'Modifica Template' : '+ Nuovo Template' ?></h3>
@@ -192,7 +124,7 @@
                 <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
                     <div>
                         <button type="submit"><?= $edit_template ? 'Aggiorna Template' : 'Crea Template' ?></button>
-                        <?php if ($edit_template): ?><a href="?tab=config#template-form" class="btn btn-secondary" style="margin-left:8px;">Annulla</a><?php endif; ?>
+                        <?php if ($edit_template): ?><a href="?tab=template#template-form" class="btn btn-secondary" style="margin-left:8px;">Annulla</a><?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -390,104 +322,4 @@
         </form>
         <?php endif; ?>
     </div>
-
-    <div class="card">
-        <h2>🔑 La tua password (<?= h($current_username) ?>)</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Chiunque può cambiare la propria password, indipendentemente dal ruolo.</p>
-        <form method="POST">
-            <input type="hidden" name="action"     value="change_own_password">
-            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-            <div class="grid">
-                <div class="input-group">
-                    <label>Nuova Password (lascia vuoto per non cambiare)</label>
-                    <input type="password" name="new_password" placeholder="Minimo 10 caratteri" autocomplete="new-password">
-                </div>
-                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
-                    <button type="submit" class="btn-secondary">Cambia Password</button>
-                </div>
-            </div>
-        </form>
-    </div>
-
-    <?php if ($is_admin): ?>
-    <div class="card">
-        <h2>👥 Utenti Dashboard</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Ogni utente ha le proprie credenziali; le azioni compiute vengono registrate nel log di audit (tab Log) con nome utente e IP. Un utente "sola lettura" può vedere tutto ma non modificare nulla.</p>
-        <table>
-            <thead><tr><th>Utente</th><th>Ruolo</th><th>Creato il</th><th></th></tr></thead>
-            <tbody>
-            <?php foreach ($users as $uname => $u):
-                $u_role = $u['role'] ?? 'admin';
-            ?>
-                <tr>
-                    <td><strong><?= h($uname) ?></strong><?= $uname === $current_username ? ' <span class="badge" style="cursor:default;">tu</span>' : '' ?></td>
-                    <td><span class="badge" style="cursor:default;<?= $u_role === 'viewer' ? 'color:#64748b;' : '' ?>"><?= $u_role === 'admin' ? '⚙ admin' : '👁 sola lettura' ?></span></td>
-                    <td style="color:#64748b;"><?= !empty($u['created_at']) ? date('d/m/Y H:i', $u['created_at']) : '—' ?></td>
-                    <td style="white-space:nowrap;">
-                        <?php if ($uname !== $current_username): ?>
-                        <form method="POST" style="display:inline;">
-                            <input type="hidden" name="action"   value="toggle_user_role">
-                            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-                            <input type="hidden" name="username"  value="<?= h($uname) ?>">
-                            <button type="submit" class="btn btn-secondary" style="font-size:11px;padding:6px 10px;margin-right:6px;"><?= $u_role === 'admin' ? '→ rendi sola lettura' : '→ rendi admin' ?></button>
-                        </form>
-                        <?php endif; ?>
-                        <?php if ($uname !== $current_username && count($users) > 1): ?>
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare l\'utente <?= h(addslashes($uname)) ?>?')">
-                            <input type="hidden" name="action"   value="delete_user">
-                            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-                            <input type="hidden" name="username"  value="<?= h($uname) ?>">
-                            <button type="submit" class="del-btn">&times;</button>
-                        </form>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-        <h3>Nuovo Utente</h3>
-        <form method="POST">
-            <input type="hidden" name="action"     value="add_user">
-            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-            <div class="grid">
-                <div class="input-group">
-                    <label>Nome utente</label>
-                    <input type="text" name="new_username" placeholder="es. marco" pattern="[a-zA-Z0-9_.\-]{3,32}" required>
-                </div>
-                <div class="input-group">
-                    <label>Password</label>
-                    <input type="password" name="new_user_password" placeholder="Minimo 10 caratteri" autocomplete="new-password" required>
-                </div>
-                <div class="input-group">
-                    <label>Ruolo</label>
-                    <select name="new_user_role">
-                        <option value="admin">Amministratore</option>
-                        <option value="viewer">Sola lettura</option>
-                    </select>
-                </div>
-                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
-                    <button type="submit" class="btn-secondary">+ Crea Utente</button>
-                </div>
-            </div>
-        </form>
-    </div>
-
-    <div class="card">
-        <h2>📧 Test Email</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Verifica che le impostazioni SMTP siano corrette inviando un'email di prova.</p>
-        <form method="POST">
-            <input type="hidden" name="action"     value="test_smtp">
-            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-            <div class="grid">
-                <div class="input-group">
-                    <label>Indirizzo destinatario</label>
-                    <input type="email" name="test_email" value="<?= h($conf['smtp_user']) ?>" required>
-                </div>
-                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;">
-                    <button type="submit" class="btn-info">📧 Invia Email di Test</button>
-                </div>
-            </div>
-        </form>
-    </div>
-    <?php endif; ?>
 
