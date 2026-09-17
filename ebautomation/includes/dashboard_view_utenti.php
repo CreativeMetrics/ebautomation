@@ -1,8 +1,13 @@
 <?php if (!defined('EBAUTO_APP')) { http_response_code(403); exit; } ?>
 
+    <div class="page-head">
+        <h1>👥 Utenti & Accesso</h1>
+        <p>La tua password personale e gli account che possono accedere alla dashboard.</p>
+    </div>
+
     <div class="card">
         <h2>🔑 La tua password (<?= h($current_username) ?>)</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Chiunque può cambiare la propria password, indipendentemente dal ruolo.</p>
+        <p class="card-subtitle">Chiunque può cambiare la propria password, indipendentemente dal ruolo.</p>
         <form method="POST">
             <input type="hidden" name="action"     value="change_own_password">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
@@ -22,7 +27,7 @@
     <?php if ($is_admin): ?>
     <div class="card">
         <h2>👥 Utenti Dashboard</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Ogni utente ha le proprie credenziali; le azioni compiute vengono registrate nel log di audit (tab Log) con nome utente e IP. Un utente "sola lettura" può vedere tutto ma non modificare nulla.</p>
+        <p class="card-subtitle">Ogni utente ha le proprie credenziali; le azioni compiute vengono registrate nel log di audit (tab Log) con nome utente e IP. Un utente "sola lettura" può vedere tutto ma non modificare nulla.</p>
         <table>
             <thead><tr><th>Utente</th><th>Ruolo</th><th>Creato il</th><th></th></tr></thead>
             <tbody>

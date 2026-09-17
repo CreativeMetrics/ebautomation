@@ -41,11 +41,16 @@
         : 'Corrente';
     ?>
 
-    <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px;">
-        <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;white-space:nowrap;">Periodo</label>
+    <div class="page-head">
+        <h1>📋 Log Webhook</h1>
+        <p>Cosa è successo, quando, e se qualcosa non è andato a buon fine.</p>
+    </div>
+
+    <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <label style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;white-space:nowrap;">Periodo</label>
         <form method="GET" style="display:contents;">
             <input type="hidden" name="tab" value="log">
-            <select name="logfile" onchange="this.form.submit()" style="padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;background:white;cursor:pointer;">
+            <select name="logfile" onchange="this.form.submit()" style="width:auto;min-width:200px;">
                 <option value="">Log corrente</option>
                 <?php foreach ($archive_files as $af):
                     preg_match('/webhook_log_(\d{4}_\d{2})\.txt$/', $af, $m);
@@ -58,7 +63,7 @@
             </select>
         </form>
         <?php if (empty($archive_files)): ?>
-            <span style="font-size:12px;color:#94a3b8;">Gli archivi dei mesi precedenti appariranno qui automaticamente.</span>
+            <span style="font-size:12px;color:var(--text-faint);">Gli archivi dei mesi precedenti appariranno qui automaticamente.</span>
         <?php endif; ?>
     </div>
 
@@ -106,9 +111,9 @@
     $failed_orders = load_failed_orders();
     ?>
     <?php if (!empty($failed_orders)): ?>
-    <div class="card" style="border-top:4px solid #ef4444;">
+    <div class="card" style="box-shadow: inset 0 3px 0 0 #ef4444, var(--shadow);">
         <h2>⚠️ Ordini in coda da ritentare (<?= count($failed_orders) ?>)</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Ordini per cui almeno uno sconto o l'invio email non sono ancora andati a buon fine dopo i tentativi automatici. Il ritentativo riprende solo la parte mancante: non ricrea sconti già ottenuti né duplica email già inviate.</p>
+        <p class="card-subtitle">Ordini per cui almeno uno sconto o l'invio email non sono ancora andati a buon fine dopo i tentativi automatici. Il ritentativo riprende solo la parte mancante: non ricrea sconti già ottenuti né duplica email già inviate.</p>
         <table>
             <thead><tr><th>Order ID</th><th>Da quando</th><th>Motivo</th></tr></thead>
             <tbody>
@@ -133,7 +138,7 @@
 
     <?php if (!empty($recent_orders)): ?>
     <div class="card">
-        <h2>📦 Ordini Processati di Recente <a href="?action=export_orders_csv" class="btn btn-secondary" style="float:right;font-size:12px;padding:8px 14px;">⬇ Esporta CSV</a></h2>
+        <h2>📦 Ordini Processati di Recente <a href="?action=export_orders_csv" class="btn btn-secondary" style="margin-left:auto;font-size:12px;padding:8px 14px;">⬇ Esporta CSV</a></h2>
         <table>
             <thead><tr><th>Order ID</th><th>Data / Ora</th><th>Stato</th><th>Sconti tracciati</th></tr></thead>
             <tbody>
@@ -145,6 +150,7 @@
                     <td style="color:#64748b;"><?= count($v['discounts']) ?></td>
                 </tr>
             <?php endforeach; ?>
+            <?php if (empty($recent_orders)): ?><tr><td colspan="4" class="empty-state">Nessun ordine ancora processato.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>

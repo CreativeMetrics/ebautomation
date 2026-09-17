@@ -466,6 +466,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: dashboard.php?tab=strumenti');
             exit;
 
+        case 'import_templates':
+            if (isset($_FILES['templates_file']) && $_FILES['templates_file']['error'] === UPLOAD_ERR_OK) {
+                $imported_tpl = json_decode(file_get_contents($_FILES['templates_file']['tmp_name']), true);
+                if (!is_array($imported_tpl) || empty($imported_tpl)) {
+                    $_SESSION['flash_error'] = 'File JSON non valido o vuoto.';
+                } else {
+                    $valid_tpl = true;
+                    foreach ($imported_tpl as $tpl_lingua => $t) {
+                        if (!is_string($tpl_lingua) || !preg_match('/^[a-zA-Z0-9_-]{1,10}$/', $tpl_lingua) || !is_array($t) || !isset($t['body_html'], $t['item_html'])) {
+                            $valid_tpl = false;
+                            break;
+                        }
+                    }
+                    if ($valid_tpl) {
+                        replace_all_email_templates($imported_tpl);
+                        audit_log('Template email importati', count($imported_tpl) . ' template');
+                        $_SESSION['flash_ok'] = 'Importati ' . count($imported_tpl) . ' template con successo.';
+                    } else {
+                        $_SESSION['flash_error'] = 'Struttura JSON non valida. Usa un file esportato da questa dashboard.';
+                    }
+                }
+            } else {
+                $_SESSION['flash_error'] = 'Nessun file selezionato.';
+            }
+            header('Location: dashboard.php?tab=strumenti');
+            exit;
+
         case 'simulate_webhook':
             $order_id_sim = preg_replace('/[^0-9]/', '', $_POST['sim_order_id'] ?? '');
             if (!$order_id_sim) {

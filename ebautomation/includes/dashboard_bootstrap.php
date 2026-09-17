@@ -124,6 +124,14 @@ if (($_GET['action'] ?? '') === 'export_regole_csv') {
     exit;
 }
 
+// ── EXPORT TEMPLATE EMAIL ────────────────────────────────────────────────────
+if (($_GET['action'] ?? '') === 'export_templates') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename="template_email_' . date('Y-m-d') . '.json"');
+    echo json_encode(load_email_templates(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // ── EXPORT ORDINI CSV ─────────────────────────────────────────────────────────
 if (($_GET['action'] ?? '') === 'export_orders_csv') {
     $all_proc = list_recent_processed_orders(1000000); // già ordinati per ts DESC

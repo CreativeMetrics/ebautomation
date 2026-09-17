@@ -63,6 +63,29 @@ check(strpos($rendered['text'], '<') === false, 'render_email_template produce u
 $rendered_logo = render_email_template($tpl, 'Azienda', 'Mario', sample_regali_finali(), true);
 check(strpos($rendered_logo['html'], 'cid:logo_cid') !== false, 'render_email_template usa il logo incorporato quando presente', $failures);
 
+// replace_all_email_templates: usata dall'import JSON — sostituzione
+// totale, con promozione automatica a predefinito se nessuno dei
+// template importati lo è (non deve mai restare senza un fallback).
+replace_all_email_templates([
+    'it' => ['nome' => 'Italiano', 'subject' => 'S1', 'colore' => '#111111', 'body_html' => '<p>it</p>', 'item_html' => '', 'is_default' => false],
+    'en' => ['nome' => 'English', 'subject' => 'S2', 'colore' => '#222222', 'body_html' => '<p>en</p>', 'item_html' => '', 'is_default' => false],
+]);
+$templates = load_email_templates();
+check(count($templates) === 2 && isset($templates['it'], $templates['en']), 'replace_all_email_templates sostituisce completamente il set di template', $failures);
+check($templates['it']['is_default'] === true, 'replace_all_email_templates promuove il primo a predefinito se nessuno lo è nell\'import', $failures);
+
+replace_all_email_templates([
+    'fr' => ['nome' => 'Français', 'subject' => 'S3', 'colore' => '#333333', 'body_html' => '<p>fr</p>', 'item_html' => '', 'is_default' => false],
+    'de' => ['nome' => 'Deutsch', 'subject' => 'S4', 'colore' => '#444444', 'body_html' => '<p>de</p>', 'item_html' => '', 'is_default' => true],
+]);
+$templates = load_email_templates();
+check(count($templates) === 2 && !isset($templates['it']), 'replace_all_email_templates rimuove i template non presenti nell\'import', $failures);
+check($templates['de']['is_default'] === true && $templates['fr']['is_default'] === false, 'replace_all_email_templates rispetta il predefinito esplicito nell\'import', $failures);
+
+// Un backup JSON va creato ad ogni scrittura distruttiva (save/delete/replace).
+$template_backups = glob(__DIR__ . '/backups/template_email_*.json') ?: [];
+check(count($template_backups) >= 1, 'le scritture sui template email creano almeno un backup', $failures);
+
 if ($failures) {
     fwrite(STDERR, implode("\n", $failures) . "\n");
     exit(1);

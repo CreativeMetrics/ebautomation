@@ -368,6 +368,10 @@ function make_config_backup(): void {
     make_backup(db()->query('SELECT key, value FROM config')->fetchAll(PDO::FETCH_KEY_PAIR), 'config');
 }
 
+function make_email_templates_backup(): void {
+    make_backup(load_email_templates(), 'template_email');
+}
+
 /**
  * Backup completo del database (non solo config/regole come make_backup):
  * copre anche ordini processati, utenti, coda falliti. Al massimo una volta
@@ -469,6 +473,7 @@ function load_email_templates(): array {
  * è considerato "a codice" (body_html/item_html scritti a mano).
  */
 function save_email_template(string $lingua, array $tpl): void {
+    make_email_templates_backup();
     db_atomic(function (PDO $pdo) use ($lingua, $tpl) {
         if (!empty($tpl['is_default'])) {
             $pdo->exec('UPDATE email_templates SET is_default = 0');
@@ -481,7 +486,38 @@ function save_email_template(string $lingua, array $tpl): void {
 }
 
 function delete_email_template(string $lingua): void {
+    make_email_templates_backup();
     db()->prepare('DELETE FROM email_templates WHERE lingua = ?')->execute([$lingua]);
+}
+
+/**
+ * Sostituisce tutti i template email con quelli forniti (import JSON dalla
+ * dashboard). Se nessuno dei template importati è marcato come predefinito,
+ * il primo lo diventa: l'app non deve mai restare senza un template
+ * predefinito da usare come fallback (vedi get_email_template).
+ */
+function replace_all_email_templates(array $templates): void {
+    make_email_templates_backup();
+    db_atomic(function (PDO $pdo) use ($templates) {
+        $pdo->exec('DELETE FROM email_templates');
+        $has_default = false;
+        foreach ($templates as $tpl) {
+            if (!empty($tpl['is_default'])) { $has_default = true; break; }
+        }
+        $stmt  = $pdo->prepare('INSERT INTO email_templates (lingua, nome, subject, colore, body_html, item_html, is_default, blocks_json, logo_width) VALUES (?,?,?,?,?,?,?,?,?)');
+        $first = true;
+        foreach ($templates as $lingua => $tpl) {
+            $is_default  = !empty($tpl['is_default']) || (!$has_default && $first);
+            $blocks_json = isset($tpl['blocks']) && is_array($tpl['blocks']) ? json_encode($tpl['blocks'], JSON_UNESCAPED_UNICODE) : null;
+            $logo_width  = max(40, min(400, (int)($tpl['logo_width'] ?? 150)));
+            $stmt->execute([
+                (string)$lingua, $tpl['nome'] ?? strtoupper((string)$lingua), $tpl['subject'] ?? '',
+                $tpl['colore'] ?? '#D64545', $tpl['body_html'] ?? '', $tpl['item_html'] ?? '',
+                $is_default ? 1 : 0, $blocks_json, $logo_width,
+            ]);
+            $first = false;
+        }
+    });
 }
 
 /**

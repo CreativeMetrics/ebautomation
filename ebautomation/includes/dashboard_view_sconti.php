@@ -1,7 +1,12 @@
 <?php if (!defined('EBAUTO_APP')) { http_response_code(403); exit; } ?>
 
+    <div class="page-head">
+        <h1>🎁 Regole Sconti</h1>
+        <p>Definisci quali acquisti generano automaticamente un codice sconto, e per quale evento.</p>
+    </div>
+
     <div class="card">
-        <h2>Automazioni Attive <a href="?action=export_regole" class="btn btn-secondary" style="float:right;font-size:12px;padding:8px 14px;">⬇ Esporta JSON</a></h2>
+        <h2>Automazioni Attive <a href="?action=export_regole" class="btn btn-secondary" style="margin-left:auto;font-size:12px;padding:8px 14px;">⬇ Esporta JSON</a></h2>
         <table>
             <thead><tr><th>Trigger</th><th>Descrizione</th><th>Sconto</th><th>Qtà</th><th>Min. trigger</th><th>Scade</th><th>Target</th><th>Stato</th><th></th></tr></thead>
             <tbody>
@@ -45,7 +50,7 @@
                 </td>
             </tr>
             <?php endforeach; ?>
-            <?php if (empty($regole)): ?><tr><td colspan="9" style="color:#94a3b8;text-align:center;padding:30px;">Nessuna regola. Creane una qui sotto.</td></tr><?php endif; ?>
+            <?php if (empty($regole)): ?><tr><td colspan="9" class="empty-state">Nessuna regola ancora creata. Creane una qui sotto. 👇</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
@@ -130,11 +135,11 @@
     <?php endif; ?>
 
     <div class="card">
-        <h2>Eventi Disponibili</h2>
+        <h2>🎪 Eventi Disponibili</h2>
         <?php if (empty($conf['api_token'])): ?>
-            <p style="color:#94a3b8;">Configura il Token API per vedere gli eventi.</p>
+            <p style="color:var(--text-faint);">Configura il Token API nella tab <a href="?tab=connessioni">Connessioni</a> per vedere gli eventi.</p>
         <?php elseif (empty($events)): ?>
-            <p style="color:#94a3b8;">Nessun evento trovato. Verifica l'Organization ID.</p>
+            <p style="color:var(--text-faint);">Nessun evento trovato. Verifica l'Organization ID nella tab <a href="?tab=connessioni">Connessioni</a>.</p>
         <?php else: ?>
         <p class="tip" style="margin-top:-14px;margin-bottom:16px;">Eventi di tutte le organizzazioni accessibili al tuo token — trigger e target possono appartenere a organizzazioni diverse.</p>
         <table>

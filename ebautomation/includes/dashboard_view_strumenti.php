@@ -1,9 +1,14 @@
 <?php if (!defined('EBAUTO_APP')) { http_response_code(403); exit; } ?>
 
+    <div class="page-head">
+        <h1>🛠️ Strumenti</h1>
+        <p>Test, import/export e backup di regole e template.</p>
+    </div>
+
     <?php if ($is_admin): ?>
     <div class="card">
         <h2>🧪 Simulazione Webhook</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Testa il flusso completo (API → sconto → email) con un ordine Eventbrite reale senza aspettare un acquisto.</p>
+        <p class="card-subtitle">Testa il flusso completo (API → sconto → email) con un ordine Eventbrite reale senza aspettare un acquisto.</p>
         <form method="POST">
             <input type="hidden" name="action"     value="simulate_webhook">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
@@ -61,7 +66,7 @@
         ?>
         <?php if (!empty($db_backups)): ?>
         <h3>Backup Database Completo</h3>
-        <p class="tip" style="margin-top:-8px;margin-bottom:10px;">Copia integrale del database (config, regole, ordini, utenti), creata al massimo una volta al giorno.</p>
+        <p class="tip" style="margin-bottom:10px;">Copia integrale del database (config, regole, ordini, utenti), creata al massimo una volta al giorno.</p>
         <ul style="list-style:none;padding:0;margin:0;">
             <?php foreach (array_slice($db_backups, 0, 7) as $bk): ?>
                 <li style="font-size:13px;padding:6px 0;border-bottom:1px solid #f1f5f9;color:#475569;">
@@ -85,9 +90,44 @@
         <?php endif; ?>
         <?php if (!empty($config_backups)): ?>
         <h3>Backup Configurazione</h3>
-        <p class="tip" style="margin-top:-8px;margin-bottom:10px;">Creato automaticamente ad ogni salvataggio della configurazione (contiene i segreti cifrati).</p>
+        <p class="tip" style="margin-bottom:10px;">Creato automaticamente ad ogni salvataggio della configurazione (contiene i segreti cifrati).</p>
         <ul style="list-style:none;padding:0;margin:0;">
             <?php foreach (array_slice($config_backups, 0, 10) as $bk): ?>
+                <li style="font-size:13px;padding:6px 0;border-bottom:1px solid #f1f5f9;color:#475569;">
+                    📄 <?= h(basename($bk)) ?>
+                    <span style="color:#94a3b8;margin-left:8px;"><?= date('d/m/Y H:i', filemtime($bk)) ?></span>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+        <?php endif; ?>
+    </div>
+
+    <div class="card">
+        <h2>✉️ Import / Export Template Email</h2>
+        <p class="card-subtitle">Utile per portarsi dietro i template (con i blocchi dell'editor visivo) su un'altra installazione, o come backup a parte prima di modifiche importanti.</p>
+        <a href="?action=export_templates" class="btn btn-secondary" style="margin-bottom:25px;">⬇ Esporta template JSON</a>
+
+        <?php if ($is_admin): ?>
+        <h3>Importa Template (JSON)</h3>
+        <p style="color:#f59e0b;font-size:13px;">⚠️ L'importazione sovrascrive tutti i template esistenti (un backup viene creato automaticamente). Le regole che referenziano una lingua non più presente ricadono sul template predefinito.</p>
+        <form method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="action"     value="import_templates">
+            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+            <div class="grid">
+                <div class="input-group"><label>File JSON template</label><input type="file" name="templates_file" accept="application/json,.json" required></div>
+                <div class="input-group" style="justify-content:flex-end;align-items:flex-end;"><button type="submit">⬆ Importa</button></div>
+            </div>
+        </form>
+        <?php endif; ?>
+
+        <?php
+        $template_backups = is_dir($backup_dir) ? (glob($backup_dir . '/template_email_*.json') ?: []) : [];
+        rsort($template_backups);
+        ?>
+        <?php if (!empty($template_backups)): ?>
+        <h3>Backup Template Email</h3>
+        <ul style="list-style:none;padding:0;margin:0;">
+            <?php foreach (array_slice($template_backups, 0, 10) as $bk): ?>
                 <li style="font-size:13px;padding:6px 0;border-bottom:1px solid #f1f5f9;color:#475569;">
                     📄 <?= h(basename($bk)) ?>
                     <span style="color:#94a3b8;margin-left:8px;"><?= date('d/m/Y H:i', filemtime($bk)) ?></span>

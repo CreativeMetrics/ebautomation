@@ -69,7 +69,7 @@ ebautomation/includes/       (require lato server da dashboard.php, mai accessib
 ├── dashboard_view_template.php     Tab "Template Email" (editor a blocchi, anteprima, invio di test)
 ├── dashboard_view_utenti.php       Tab "Utenti & Accesso" (password personale, gestione utenti)
 ├── dashboard_view_log.php          Tab "Log Webhook" (log, ordini falliti, audit log)
-├── dashboard_view_strumenti.php    Tab "Strumenti" (simulazione webhook, import/export regole, backup)
+├── dashboard_view_strumenti.php    Tab "Strumenti" (simulazione webhook, import/export regole e template, backup)
 └── dashboard_view_guida.php        Tab "Guida & Help" (istruzioni, organizzazioni, URL webhook)
 
 tests/
@@ -88,9 +88,10 @@ tests/
 - **Gestione `order.updated`**: se un ordine già evaso viene modificato (es. quantità aumentata), l'app rivaluta le regole senza mai revocare sconti già emessi
 - **Alert email** all'amministratore quando gli errori superano una soglia configurabile
 - **Multi-utente con ruoli**: amministratori (accesso completo) e utenti in sola lettura, ogni azione tracciata in un log di audit
-- **Backup automatici**: configurazione, regole e database completo (ogni notte, ultimi 7 conservati)
-- **Export/import regole** in JSON o CSV
+- **Backup automatici**: configurazione, regole, template email e database completo (ogni notte, ultimi 7/10 conservati)
+- **Export/import regole** in JSON o CSV, **export/import template email** in JSON
 - **Statistiche giornaliere** ed export CSV degli ordini processati
+- **Interfaccia responsive** con menu mobile, pensata per essere chiara anche su schermi piccoli
 
 ## Sicurezza
 

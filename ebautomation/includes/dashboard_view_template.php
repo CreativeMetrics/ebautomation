@@ -1,8 +1,13 @@
 <?php if (!defined('EBAUTO_APP')) { http_response_code(403); exit; } ?>
 
+    <div class="page-head">
+        <h1>✉️ Template Email</h1>
+        <p>Progetta l'email che i clienti ricevono con il codice sconto, con un editor visivo a blocchi.</p>
+    </div>
+
     <div class="card">
-        <h2>✉️ Template Email</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Uno o più template HTML completi, uno per lingua/variante visiva. Ogni regola sceglie quale usare (campo "Lingua Email"); chi non specifica nulla usa il predefinito.</p>
+        <h2>Template Configurati <a href="?action=export_templates" class="btn btn-secondary" style="margin-left:auto;font-size:12px;padding:8px 14px;">⬇ Esporta JSON</a></h2>
+        <p class="card-subtitle">Uno o più template HTML completi, uno per lingua/variante visiva. Ogni regola sceglie quale usare (campo "Lingua Email"); chi non specifica nulla usa il predefinito.</p>
         <table>
             <thead><tr><th>Codice</th><th>Nome</th><th>Oggetto</th><th>Predefinito</th><th></th></tr></thead>
             <tbody>

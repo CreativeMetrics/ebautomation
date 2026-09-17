@@ -1,8 +1,13 @@
 <?php if (!defined('EBAUTO_APP')) { http_response_code(403); exit; } ?>
 
-    <div class="card" style="border-top:4px solid <?= $conf['paused'] ? '#f59e0b' : '#10b981' ?>;">
+    <div class="page-head">
+        <h1>🔌 Connessioni</h1>
+        <p>Stato delle automazioni, credenziali Eventbrite e SMTP, webhook.</p>
+    </div>
+
+    <div class="card" style="box-shadow: inset 0 3px 0 0 <?= $conf['paused'] ? '#f59e0b' : '#10b981' ?>, var(--shadow);">
         <h2><?= $conf['paused'] ? '⏸ Automazioni in Pausa' : '▶ Automazioni Attive' ?></h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;"><?= $conf['paused'] ? 'I webhook vengono ricevuti ma ignorati. Nessuno sconto verrà creato.' : 'Tutto funziona normalmente. Metti in pausa per bloccare temporaneamente le automazioni.' ?></p>
+        <p class="card-subtitle"><?= $conf['paused'] ? 'I webhook vengono ricevuti ma ignorati. Nessuno sconto verrà creato.' : 'Tutto funziona normalmente. Metti in pausa per bloccare temporaneamente le automazioni.' ?></p>
         <?php if ($is_admin): ?>
         <form method="POST">
             <input type="hidden" name="action"     value="toggle_pause">
@@ -72,7 +77,7 @@
     <?php if ($is_admin): ?>
     <div class="card">
         <h2>🔄 Rigenera Token Webhook</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Il vecchio URL webhook diventerà <strong>invalido</strong>: aggiornalo subito su Eventbrite dopo la rigenerazione.</p>
+        <p class="card-subtitle">Il vecchio URL webhook diventerà <strong>invalido</strong>: aggiornalo subito su Eventbrite dopo la rigenerazione.</p>
         <form method="POST" onsubmit="return confirm('Il vecchio URL diventerà invalido. Continuare?')">
             <input type="hidden" name="action"     value="regenerate_token">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
@@ -84,7 +89,7 @@
     <?php if ($is_admin): ?>
     <div class="card">
         <h2>📧 Test Email</h2>
-        <p style="color:#64748b;font-size:14px;margin-top:0;">Verifica che le impostazioni SMTP siano corrette inviando un'email di prova.</p>
+        <p class="card-subtitle">Verifica che le impostazioni SMTP siano corrette inviando un'email di prova.</p>
         <form method="POST">
             <input type="hidden" name="action"     value="test_smtp">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
