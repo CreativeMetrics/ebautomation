@@ -842,6 +842,10 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
         .del-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-weight: bold; font-size: 18px; padding: 0 4px; line-height: 1; }
         code { background: #f1f5f9; padding: 10px 14px; border-radius: 6px; display: block; font-size: 13px; word-break: break-all; }
         .edit-highlight { background: #fffbeb; border: 2px solid #fcd34d; }
+        .edit-highlight-row td { background: #fffbeb; }
+        .edit-highlight-box { background: #fffbeb; border: 2px solid #fcd34d; border-radius: 10px; padding: 20px; margin-top: 10px; }
+        .edit-highlight-banner { background: #fde68a; color: #92400e; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: 700; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .edit-highlight-banner a { color: #92400e; text-decoration: underline; font-weight: 700; white-space: nowrap; }
         .tip { font-size: 12px; color: #94a3b8; margin-top: 4px; }
         .editor-mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
         .editor-mode-toggle button { background: #f1f5f9; color: #64748b; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 13px; }
@@ -1126,10 +1130,12 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
         <table>
             <thead><tr><th>Codice</th><th>Nome</th><th>Oggetto</th><th>Predefinito</th><th></th></tr></thead>
             <tbody>
-            <?php foreach ($email_templates as $lingua => $tpl): ?>
-                <tr>
+            <?php foreach ($email_templates as $lingua => $tpl):
+                $is_being_edited = $edit_template_lingua === $lingua;
+            ?>
+                <tr<?= $is_being_edited ? ' class="edit-highlight-row"' : '' ?>>
                     <td><span class="badge"><?= h($lingua) ?></span></td>
-                    <td><strong><?= h($tpl['nome']) ?></strong></td>
+                    <td><strong><?= h($tpl['nome']) ?></strong><?= $is_being_edited ? ' <span class="badge" style="background:#fef3c7;color:#92400e;cursor:default;">✏ in modifica</span>' : '' ?></td>
                     <td style="color:#64748b;"><?= h($tpl['subject']) ?></td>
                     <td><?= $tpl['is_default'] ? '<span style="color:#10b981;">✓ predefinito</span>' : '—' ?></td>
                     <td style="white-space:nowrap;">
@@ -1152,7 +1158,14 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
         </table>
 
         <?php if ($is_admin): ?>
-        <h3 id="template-form"><?= $edit_template ? '✏️ Modifica Template «' . h($edit_template_lingua) . '»' : '+ Nuovo Template' ?></h3>
+        <div id="template-form" class="<?= $edit_template ? 'edit-highlight-box' : '' ?>">
+            <?php if ($edit_template): ?>
+            <div class="edit-highlight-banner">
+                <span>✏️ Stai modificando il template <strong>«<?= h($edit_template['nome']) ?>»</strong> (codice <code style="display:inline;padding:1px 6px;background:rgba(0,0,0,0.06);"><?= h($edit_template_lingua) ?></code>)<?= $edit_template['is_default'] ? ' — è il template <strong>predefinito</strong>' : '' ?></span>
+                <a href="?tab=config#template-form">Annulla, crea un nuovo template</a>
+            </div>
+            <?php endif; ?>
+        <h3><?= $edit_template ? 'Modifica Template' : '+ Nuovo Template' ?></h3>
         <form method="POST">
             <input type="hidden" name="action"     value="save_email_template">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
@@ -1240,6 +1253,7 @@ $webhook_url      = $base_url . 'eventbrite-webhook.php' . ($conf['webhook_token
                 </div>
             </div>
         </form>
+        </div>
 
         <script>
         (function() {

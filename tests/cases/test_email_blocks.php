@@ -108,9 +108,16 @@ check(strpos($preview_render['html'], 'height:auto') !== false, 'render_email_te
 // alcuni client email (Outlook desktop in primis) ignorano max-width nel
 // CSS e mostrerebbero il logo alla dimensione originale.
 check(strpos($preview_render['html'], 'width="220"') !== false, 'render_email_template imposta anche l\'attributo HTML width, letto dai client email che ignorano il CSS', $failures);
+check(strpos($preview_render['html'], 'width:220px') !== false, 'render_email_template imposta anche un width CSS fisso in pixel (non solo max-width)', $failures);
+// Mai in percentuale: alcuni client (Outlook desktop) non contengono
+// l'immagine in un blocco di larghezza nota quanto in un browser, quindi
+// "width:100%" può farla scalare alla larghezza dell'intera finestra di
+// lettura invece che alla dimensione scelta — è successo in produzione.
+check(strpos($preview_render['html'], '%') === false, 'render_email_template non usa mai percentuali per la larghezza del logo (regressione: ingrandiva il logo in alcuni client email)', $failures);
 
 $send_render = render_email_template($logo_tpl, 'Azienda', 'Mario', [], true);
 check(strpos($send_render['html'], 'cid:logo_cid') !== false, 'render_email_template usa "cid:logo_cid" di default (invio reale, logo incorporato)', $failures);
+check(strpos($send_render['html'], '%') === false, 'render_email_template (invio reale) non usa percentuali per la larghezza del logo', $failures);
 
 if ($failures) {
     fwrite(STDERR, implode("\n", $failures) . "\n");

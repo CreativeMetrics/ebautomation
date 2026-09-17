@@ -658,15 +658,19 @@ function render_email_template(array $template, string $business_name, string $n
         ]);
     }
 
-    // L'attributo HTML "width" (non solo lo style CSS) è indispensabile per
-    // molti client email — Outlook desktop in particolare, che usa il
-    // motore di rendering di Word e ignora "max-width" nel CSS: senza
-    // width="..." mostrerebbe il logo alla sua dimensione originale,
-    // anche se in un browser (l'anteprima) risulta già corretto.
-    // Nessun attributo "height": lasciarlo assente fa scalare
-    // proporzionalmente anche ai client che non supportano height:auto.
+    // Dimensione del logo fissata in pixel, mai in percentuale: alcuni
+    // client email non contengono l'immagine dentro un blocco di
+    // larghezza nota quanto il browser (Outlook desktop in particolare
+    // ignora anche il "max-width:600px" del corpo email), quindi un
+    // "width:100%" nello style rischia di farla scalare alla larghezza
+    // dell'intera finestra di lettura — molto peggio della dimensione
+    // originale dell'immagine. Attributo HTML "width" (letto da Outlook,
+    // che ignora il CSS sulle immagini) + "width"/"max-width" in px nello
+    // style (letti da tutti gli altri client) devono sempre concordare
+    // sullo stesso valore esatto. Nessun attributo "height": lasciarlo
+    // assente fa scalare l'immagine proporzionalmente ovunque.
     $logo_html = $has_logo
-        ? '<img src="' . h($logo_src) . '" width="' . $logo_width . '" style="max-width:' . $logo_width . 'px;width:100%;height:auto;margin-bottom:20px;">'
+        ? '<img src="' . h($logo_src) . '" width="' . $logo_width . '" style="width:' . $logo_width . 'px;max-width:' . $logo_width . 'px;height:auto;margin-bottom:20px;">'
         : '<h1 style="color:#2d3142;">' . h($business_name) . '</h1>';
 
     $html = strtr((string)($template['body_html'] ?? ''), [
