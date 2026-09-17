@@ -1,0 +1,13 @@
+# Frammenti interni di dashboard.php: non vanno mai richiesti direttamente
+# dal browser (mancano le variabili/i controlli di sicurezza che dashboard.php
+# imposta prima di includerli — CSRF, sessione, autenticazione). dashboard.php
+# li carica via require lato server, quindi non passano da qui: bloccarne
+# l'accesso diretto è puro indurimento, ogni file ha comunque una propria
+# guardia PHP (EBAUTO_APP) come seconda linea di difesa per chi non usa Apache.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

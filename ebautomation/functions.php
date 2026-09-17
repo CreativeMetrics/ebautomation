@@ -1,4 +1,11 @@
 <?php
+// Cartella radice dell'app: functions.php non viene mai spostato da qui,
+// quindi il suo __DIR__ è l'unico affidabile per costruire percorsi
+// assoluti (logo.png, PHPMailer/, backups/, ecc.) — i file sotto
+// includes/ hanno un __DIR__ diverso (la propria sottocartella) e devono
+// usare questa costante invece di __DIR__ per riferirsi alla radice.
+define('APP_DIR', __DIR__);
+
 define('LOG_FILE',        __DIR__ . '/webhook_log.txt');
 define('SECRET_KEY_FILE', __DIR__ . '/secret.php');
 define('AUDIT_LOG_FILE',  __DIR__ . '/audit_log.txt');

@@ -15,7 +15,7 @@ Applicazione PHP standalone, zero dipendenze esterne (nessun Composer/npm), pens
 
 - **PHP 8.0 o superiore**
 - Estensioni PHP: `pdo_sqlite`, `sodium`, `curl`, `mbstring` (quasi sempre già presenti su qualunque hosting PHP moderno)
-- **Apache** con supporto `.htaccess` — su Nginx serve una configurazione manuale equivalente per bloccare l'accesso diretto a `database.sqlite`, `*.txt`, ecc. (vedi `ebautomation/.htaccess` per le regole da tradurre)
+- **Apache** con supporto `.htaccess` — su Nginx serve una configurazione manuale equivalente per bloccare l'accesso diretto a `database.sqlite`, `*.txt`, `includes/`, ecc. (vedi `ebautomation/.htaccess` e `ebautomation/includes/.htaccess` per le regole da tradurre — i file sotto `includes/` hanno comunque una propria protezione PHP anche senza queste regole)
 - Nessun database esterno: SQLite è incluso in PHP, il file si crea da solo al primo avvio
 
 ## Installazione
@@ -45,7 +45,8 @@ Se stai aggiornando da una versione basata su file JSON (`config.json`, `regole_
 
 ```
 ebautomation/
-├── dashboard.php            Pannello admin (setup, login, regole, config, log, guida)
+├── dashboard.php            Punto d'ingresso del pannello admin — bootstrap e poi delega a includes/
+├── includes/                Il pannello admin diviso per responsabilità (vedi sotto)
 ├── eventbrite-webhook.php   Endpoint pubblico chiamato da Eventbrite
 ├── functions.php            Logica condivisa: storage SQLite, cifratura, utenti, retry, ecc.
 ├── reset-password.php       Recupero password verificando il Private Token API
@@ -56,6 +57,17 @@ ebautomation/
 ├── database.sqlite           Creato al primo avvio — non versionato
 ├── secret.php                Chiave di cifratura — creato al primo avvio, non versionato
 └── backups/                   Backup automatici (config, regole, database completo)
+
+ebautomation/includes/       (require lato server da dashboard.php, mai accessibili direttamente via browser)
+├── dashboard_pages.php       render_health_check/render_setup/render_login (pagine standalone, fuori dal layout principale)
+├── dashboard_bootstrap.php   Setup, login, logout, timeout sessione, export JSON/CSV, anteprima template
+├── dashboard_actions.php     Tutte le azioni POST (salva config/regole/template, utenti, retry, ecc.)
+├── dashboard_data.php        Caricamento dati per la vista (regole, template, eventi Eventbrite, ecc.)
+├── dashboard_layout.php      Scheletro HTML (head/sidebar) + smista alla vista della tab attiva
+├── dashboard_view_sconti.php   Tab "Regole Sconti"
+├── dashboard_view_config.php   Tab "Configurazione" (SMTP, Eventbrite, template email, utenti)
+├── dashboard_view_log.php      Tab "Log Webhook" (log, ordini falliti, audit log)
+└── dashboard_view_guida.php    Tab "Guida & Help" (health check, simulazione webhook, backup)
 
 tests/
 ├── run.php                   Esegue tutti i casi in tests/cases/
