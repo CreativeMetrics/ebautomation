@@ -1,6 +1,9 @@
 <?php
 if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
 
+use PHPMailer\PHPMailer\PHPMailer as Mailer;
+use PHPMailer\PHPMailer\Exception as MailException;
+
 // ── AZIONI POST ───────────────────────────────────────────────────────────────
 $flash_error = $_SESSION['flash_error'] ?? '';
 $flash_ok    = $_SESSION['flash_ok']    ?? '';
