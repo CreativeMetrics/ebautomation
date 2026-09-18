@@ -671,13 +671,14 @@ function render_blocks_to_html(array $blocks, string $colore): array {
 }
 
 /**
- * Prepara il logo da incorporare in un'email, ridimensionato a una
- * risoluzione coerente con la larghezza a cui viene poi mostrato (2x, per
- * restare nitido anche su schermi ad alta densità). Senza questo passaggio
+ * Prepara il logo da incorporare in un'email, ridimensionato esattamente
+ * alla larghezza a cui viene poi mostrato (1:1, niente margine per schermi
+ * retina: alcuni client — Gmail in primis — mostrano comunque un'icona di
+ * zoom su ogni immagine incorporata, indipendentemente dalla sua
+ * risoluzione, quindi non ha senso appesantire l'email per uno scarto di
+ * nitidezza che non risolve comunque quell'icona). Senza questo passaggio
  * il file originale — spesso molto più grande della larghezza configurata
- * nel template — finiva incorporato per intero: email più pesanti, e alcuni
- * client (Gmail in primis) mostrano un'icona di zoom sulle immagini la cui
- * risoluzione reale è molto maggiore di quella visualizzata.
+ * nel template — finiva incorporato per intero, appesantendo ogni email.
  *
  * La versione ridimensionata viene cachata su disco (rigenerata solo se il
  * logo originale cambia o la larghezza richiesta cambia) per non rifare il
@@ -692,7 +693,7 @@ function get_logo_path_for_email(string $original_path, int $display_width): str
     if (!$info) return $original_path;
     [$orig_w, $orig_h, $type] = $info;
 
-    $target_w = max(1, $display_width) * 2;
+    $target_w = max(1, $display_width);
     if ($orig_w <= $target_w) return $original_path;
 
     $dir = __DIR__ . '/cache';
