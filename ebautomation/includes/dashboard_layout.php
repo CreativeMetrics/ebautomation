@@ -130,10 +130,23 @@ if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
         .log-box { background: #0e1420; color: #9aa5c3; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; padding: 18px 20px; border-radius: var(--radius-sm); overflow-y: auto; max-height: 460px; white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
         .log-box .log-err  { color: #f87171; }
         .log-box .log-info { color: #6ee7b7; }
-        .del-btn { background: none; border: none; color: var(--danger); cursor: pointer; font-weight: bold; font-size: 17px; padding: 4px 6px; line-height: 1; border-radius: 6px; box-shadow: none; }
-        .del-btn:hover { background: var(--danger-50); box-shadow: none; transform: none; }
         code { background: var(--bg); border: 1px solid var(--border); padding: 10px 14px; border-radius: var(--radius-sm); display: block; font-size: 13px; word-break: break-all; font-family: 'SFMono-Regular', Consolas, monospace; }
         .empty-state { text-align: center; padding: 36px 20px; color: var(--text-faint); font-size: 13.5px; }
+
+        /* ── Azioni a icona (righe di tabella) ──────────────────────────── */
+        .row-actions { display: flex; align-items: center; gap: 2px; }
+        .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 8px; color: var(--text-faint); background: transparent; text-decoration: none; transition: background .15s, color .15s; box-shadow: none; border: none; cursor: pointer; padding: 0; }
+        .icon-btn:hover { background: var(--bg); color: var(--text); transform: none; box-shadow: none; }
+        .icon-btn svg { width: 17px; height: 17px; }
+        .icon-btn.icon-info:hover { background: var(--info-50); color: var(--info); }
+        .icon-btn.icon-danger:hover { background: var(--danger-50); color: var(--danger); }
+        .icon-btn:disabled, .icon-btn.disabled { opacity: .3; cursor: default; pointer-events: none; }
+
+        /* ── Badge a pillola (stato) ─────────────────────────────────────── */
+        .pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+        .pill-success { background: var(--success-50); color: #166534; }
+        .pill-warning { background: var(--warning-50); color: #92400e; }
+        .pill-muted { background: var(--bg); color: var(--text-faint); font-weight: 600; }
 
         .edit-highlight { background: var(--warning-50); border: 1.5px solid #fcd34d; }
         .edit-highlight-row td { background: var(--warning-50); }

@@ -1,6 +1,22 @@
 <?php
 if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
 
+/**
+ * Icone SVG inline per le azioni sulle righe delle tabelle (anteprima,
+ * modifica, elimina): niente libreria di icone esterna (coerente con lo
+ * zero-dependency dell'app), "currentColor" le fa ereditare il colore —
+ * anche in hover — dal pulsante .icon-btn che le contiene.
+ */
+function icon_svg(string $name): string {
+    $icons = [
+        'eye'    => '<path d="M1 10s3-6 9-6 9 6 9 6-3 6-9 6-9-6-9-6Z" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.6"/>',
+        'pencil' => '<path d="M13.4 3.4 16.6 6.6 7 16.2 2.8 17.2 3.8 13 13.4 3.4Z" stroke-linejoin="round" stroke-linecap="round"/>',
+        'trash'  => '<path d="M4 6h12M8 6V4.4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V6M6 6l.7 10a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9L14 6" stroke-linecap="round" stroke-linejoin="round"/>',
+    ];
+    $path = $icons[$name] ?? '';
+    return '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' . $path . '</svg>';
+}
+
 function render_health_check(array $conf): void {
     $checks = [];
 

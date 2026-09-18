@@ -38,23 +38,25 @@
                     <td><strong><?= h($uname) ?></strong><?= $uname === $current_username ? ' <span class="badge" style="cursor:default;">tu</span>' : '' ?></td>
                     <td><span class="badge" style="cursor:default;<?= $u_role === 'viewer' ? 'color:#64748b;' : '' ?>"><?= $u_role === 'admin' ? '⚙ admin' : '👁 sola lettura' ?></span></td>
                     <td style="color:#64748b;"><?= !empty($u['created_at']) ? date('d/m/Y H:i', $u['created_at']) : '—' ?></td>
-                    <td style="white-space:nowrap;">
+                    <td>
+                        <div class="row-actions">
                         <?php if ($uname !== $current_username): ?>
-                        <form method="POST" style="display:inline;">
+                        <form method="POST">
                             <input type="hidden" name="action"   value="toggle_user_role">
                             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
                             <input type="hidden" name="username"  value="<?= h($uname) ?>">
-                            <button type="submit" class="btn btn-secondary" style="font-size:11px;padding:6px 10px;margin-right:6px;"><?= $u_role === 'admin' ? '→ rendi sola lettura' : '→ rendi admin' ?></button>
+                            <button type="submit" class="btn btn-secondary" style="font-size:11px;padding:6px 10px;">→ <?= $u_role === 'admin' ? 'rendi sola lettura' : 'rendi admin' ?></button>
                         </form>
                         <?php endif; ?>
                         <?php if ($uname !== $current_username && count($users) > 1): ?>
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare l\'utente <?= h(addslashes($uname)) ?>?')">
+                        <form method="POST" onsubmit="return confirm('Eliminare l\'utente <?= h(addslashes($uname)) ?>?')">
                             <input type="hidden" name="action"   value="delete_user">
                             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
                             <input type="hidden" name="username"  value="<?= h($uname) ?>">
-                            <button type="submit" class="del-btn">&times;</button>
+                            <button type="submit" class="icon-btn icon-danger" title="Elimina utente"><?= icon_svg('trash') ?></button>
                         </form>
                         <?php endif; ?>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>

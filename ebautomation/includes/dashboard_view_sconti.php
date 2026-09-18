@@ -34,18 +34,20 @@
                         </button>
                     </form>
                     <?php else: ?>
-                        <span class="badge" style="cursor:default;"><?= $r_attiva ? '✓ attiva' : '⏸ disattiva' ?></span>
+                        <span class="pill <?= $r_attiva ? 'pill-success' : 'pill-muted' ?>"><?= $r_attiva ? '✓ attiva' : '⏸ disattiva' ?></span>
                     <?php endif; ?>
                 </td>
-                <td style="white-space:nowrap;">
+                <td>
                     <?php if ($is_admin): ?>
-                    <a href="?tab=sconti&edit=<?= urlencode($tid) ?>" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;">✏</a>
-                    <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare questa regola?')">
-                        <input type="hidden" name="action"     value="delete_regola">
-                        <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-                        <input type="hidden" name="trigger_id" value="<?= h($tid) ?>">
-                        <button type="submit" class="del-btn">&times;</button>
-                    </form>
+                    <div class="row-actions">
+                        <a href="?tab=sconti&edit=<?= urlencode($tid) ?>" class="icon-btn icon-info" title="Modifica regola"><?= icon_svg('pencil') ?></a>
+                        <form method="POST" onsubmit="return confirm('Eliminare questa regola?')">
+                            <input type="hidden" name="action"     value="delete_regola">
+                            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+                            <input type="hidden" name="trigger_id" value="<?= h($tid) ?>">
+                            <button type="submit" class="icon-btn icon-danger" title="Elimina regola"><?= icon_svg('trash') ?></button>
+                        </form>
+                    </div>
                     <?php endif; ?>
                 </td>
             </tr>

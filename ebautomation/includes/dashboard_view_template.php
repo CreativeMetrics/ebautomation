@@ -16,22 +16,24 @@
             ?>
                 <tr<?= $is_being_edited ? ' class="edit-highlight-row"' : '' ?>>
                     <td><span class="badge"><?= h($lingua) ?></span></td>
-                    <td><strong><?= h($tpl['nome']) ?></strong><?= $is_being_edited ? ' <span class="badge" style="background:#fef3c7;color:#92400e;cursor:default;">✏ in modifica</span>' : '' ?></td>
-                    <td style="color:#64748b;"><?= h($tpl['subject']) ?></td>
-                    <td><?= $tpl['is_default'] ? '<span style="color:#10b981;">✓ predefinito</span>' : '—' ?></td>
-                    <td style="white-space:nowrap;">
-                        <a href="?tab=template&action=preview_email_template&lingua=<?= urlencode($lingua) ?>" target="_blank" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;" title="Anteprima in una nuova scheda">👁</a>
-                        <?php if ($is_admin): ?>
-                        <a href="?tab=template&edit_template=<?= urlencode($lingua) ?>#template-form" style="color:#0ea5e9;text-decoration:none;font-weight:700;margin-right:8px;">✏</a>
-                        <?php if (count($email_templates) > 1): ?>
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Eliminare il template <?= h(addslashes($tpl['nome'])) ?>?')">
-                            <input type="hidden" name="action" value="delete_email_template">
-                            <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-                            <input type="hidden" name="lingua" value="<?= h($lingua) ?>">
-                            <button type="submit" class="del-btn">&times;</button>
-                        </form>
-                        <?php endif; ?>
-                        <?php endif; ?>
+                    <td><strong><?= h($tpl['nome']) ?></strong><?= $is_being_edited ? ' <span class="pill pill-warning">✏ in modifica</span>' : '' ?></td>
+                    <td style="color:var(--text-muted);"><?= h($tpl['subject']) ?></td>
+                    <td><?= $tpl['is_default'] ? '<span class="pill pill-success">✓ Predefinito</span>' : '<span class="pill pill-muted">—</span>' ?></td>
+                    <td>
+                        <div class="row-actions">
+                            <a href="?tab=template&action=preview_email_template&lingua=<?= urlencode($lingua) ?>" target="_blank" class="icon-btn icon-info" title="Anteprima in una nuova scheda"><?= icon_svg('eye') ?></a>
+                            <?php if ($is_admin): ?>
+                            <a href="?tab=template&edit_template=<?= urlencode($lingua) ?>#template-form" class="icon-btn icon-info" title="Modifica template"><?= icon_svg('pencil') ?></a>
+                            <?php if (count($email_templates) > 1): ?>
+                            <form method="POST" onsubmit="return confirm('Eliminare il template <?= h(addslashes($tpl['nome'])) ?>?')">
+                                <input type="hidden" name="action" value="delete_email_template">
+                                <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+                                <input type="hidden" name="lingua" value="<?= h($lingua) ?>">
+                                <button type="submit" class="icon-btn icon-danger" title="Elimina template"><?= icon_svg('trash') ?></button>
+                            </form>
+                            <?php endif; ?>
+                            <?php endif; ?>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>
