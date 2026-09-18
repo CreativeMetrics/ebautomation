@@ -13,6 +13,7 @@ audit_log.txt
 trigger_events.txt
 target_events.txt
 backups/
+cache/
 
 # File di una precedente installazione basata su file JSON, rinominati
 # automaticamente dopo la migrazione a SQLite (vedi migrate_legacy_json_if_needed

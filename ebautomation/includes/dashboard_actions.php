@@ -46,6 +46,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     && $img_info && in_array($img_info['mime'], ['image/png','image/jpeg'], true)
                     && $_FILES['logo']['size'] <= 2 * 1024 * 1024) {
                     move_uploaded_file($_FILES['logo']['tmp_name'], APP_DIR . '/logo.png');
+                    // Il logo è cambiato: le versioni ridimensionate cachate per le email
+                    // appartengono al logo precedente, vanno scartate.
+                    foreach (glob(APP_DIR . '/cache/logo_*.png') ?: [] as $stale) unlink($stale);
                 }
             }
             save_config($updated);
@@ -282,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mail->addAddress($to);
                 $mail->isHTML(true);
                 $mail->Subject = '[TEST] ' . $rendered['subject'];
-                if ($has_logo) $mail->addEmbeddedImage($logo_path, 'logo_cid');
+                if ($has_logo) $mail->addEmbeddedImage(get_logo_path_for_email($logo_path, $template['logo_width'] ?? 150), 'logo_cid');
                 $mail->Body    = $rendered['html'];
                 $mail->AltBody = $rendered['text'];
                 $mail->send();

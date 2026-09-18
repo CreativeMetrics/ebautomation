@@ -279,7 +279,7 @@ if (!empty($regali_finali) && !empty($targets_to_email)) {
                     $mail->addAddress($recipient);
                     $mail->isHTML(true);
                     $mail->Subject = $rendered['subject'];
-                    if ($has_logo) $mail->addEmbeddedImage($logo_path, 'logo_cid');
+                    if ($has_logo) $mail->addEmbeddedImage(get_logo_path_for_email($logo_path, $template['logo_width'] ?? 150), 'logo_cid');
                     $mail->Body    = $rendered['html'];
                     $mail->AltBody = $rendered['text'];
                     $mail->send();

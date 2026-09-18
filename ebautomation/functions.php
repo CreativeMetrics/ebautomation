@@ -671,6 +671,71 @@ function render_blocks_to_html(array $blocks, string $colore): array {
 }
 
 /**
+ * Prepara il logo da incorporare in un'email, ridimensionato a una
+ * risoluzione coerente con la larghezza a cui viene poi mostrato (2x, per
+ * restare nitido anche su schermi ad alta densità). Senza questo passaggio
+ * il file originale — spesso molto più grande della larghezza configurata
+ * nel template — finiva incorporato per intero: email più pesanti, e alcuni
+ * client (Gmail in primis) mostrano un'icona di zoom sulle immagini la cui
+ * risoluzione reale è molto maggiore di quella visualizzata.
+ *
+ * La versione ridimensionata viene cachata su disco (rigenerata solo se il
+ * logo originale cambia o la larghezza richiesta cambia) per non rifare il
+ * resize ad ogni invio. Se GD non è disponibile, il file non è
+ * un'immagine valida, o è già alla risoluzione target o più piccolo,
+ * ritorna semplicemente il percorso originale.
+ */
+function get_logo_path_for_email(string $original_path, int $display_width): string {
+    if (!extension_loaded('gd') || !file_exists($original_path)) return $original_path;
+
+    $info = @getimagesize($original_path);
+    if (!$info) return $original_path;
+    [$orig_w, $orig_h, $type] = $info;
+
+    $target_w = max(1, $display_width) * 2;
+    if ($orig_w <= $target_w) return $original_path;
+
+    $dir = __DIR__ . '/cache';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+        file_put_contents($dir . '/.htaccess', "Deny from all\n");
+    }
+    $cache_path = $dir . '/logo_' . $target_w . '_' . filemtime($original_path) . '.png';
+    if (file_exists($cache_path)) return $cache_path;
+
+    $src = match ($type) {
+        IMAGETYPE_PNG  => @imagecreatefrompng($original_path),
+        IMAGETYPE_JPEG => @imagecreatefromjpeg($original_path),
+        IMAGETYPE_GIF  => @imagecreatefromgif($original_path),
+        default        => null,
+    };
+    if (!$src) return $original_path;
+
+    $target_h = max(1, (int)round($orig_h * ($target_w / $orig_w)));
+    $dst = imagecreatetruecolor($target_w, $target_h);
+    imagealphablending($dst, false);
+    imagesavealpha($dst, true);
+    imagecopyresampled($dst, $src, 0, 0, 0, 0, $target_w, $target_h, $orig_w, $orig_h);
+    imagedestroy($src);
+
+    $ok = imagepng($dst, $cache_path, 6);
+    imagedestroy($dst);
+
+    // Rimuove solo le versioni cachate di un logo ORMAI SOSTITUITO (mtime
+    // precedente): template diversi possono avere una logo_width diversa,
+    // quindi più file cachati per lo stesso logo corrente sono legittimi e
+    // vanno lasciati (altrimenti ogni invio ricalcolerebbe da capo quello
+    // dell'altro template).
+    foreach (glob($dir . '/logo_*.png') ?: [] as $f) {
+        if ($f !== $cache_path && !str_ends_with($f, '_' . filemtime($original_path) . '.png')) {
+            @unlink($f);
+        }
+    }
+
+    return $ok ? $cache_path : $original_path;
+}
+
+/**
  * Sostituisce i segnaposto di un template con i dati reali dell'ordine,
  * producendo oggetto/HTML/testo semplice pronti per PHPMailer. Condivisa
  * tra invio reale (webhook) e anteprima/test dalla dashboard, così

@@ -17,5 +17,6 @@
     </IfModule>
 </FilesMatch>
 
-# Le cartelle backups/ (dump periodici config/regole) e PHPMailer/ hanno un
-# proprio .htaccess/non necessitano di esecuzione PHP diretta.
+# Le cartelle backups/ (dump periodici config/regole), cache/ (logo
+# ridimensionato per le email) e PHPMailer/ hanno un proprio .htaccess/non
+# necessitano di esecuzione PHP diretta.
