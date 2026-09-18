@@ -103,7 +103,7 @@ if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
         .tip { font-size: 12px; color: var(--text-faint); margin-top: 2px; line-height: 1.45; }
 
         /* ── Buttons ─────────────────────────────────────────────────── */
-        button, .btn { background: var(--primary); color: white; border: none; padding: 11px 20px; border-radius: var(--radius-sm); cursor: pointer; font-weight: 700; font-size: 13.5px; font-family: inherit; transition: transform .12s, box-shadow .12s, background .15s, opacity .15s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 2px rgba(20,24,42,.08); }
+        button, .btn { background: var(--primary); color: white; border: none; padding: 11px 20px; border-radius: var(--radius-sm); cursor: pointer; font-weight: 700; font-size: 13.5px; font-family: inherit; transition: transform .12s, box-shadow .12s, background .15s, opacity .15s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 2px rgba(20,24,42,.08); white-space: nowrap; flex-shrink: 0; }
         button:hover, .btn:hover { background: var(--primary-dark); box-shadow: 0 4px 10px -2px rgba(214,69,69,.4); transform: translateY(-1px); }
         button:active, .btn:active { transform: translateY(0); box-shadow: 0 1px 2px rgba(20,24,42,.08); }
         button:focus-visible, .btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
@@ -117,11 +117,15 @@ if (!defined('EBAUTO_APP')) { http_response_code(403); exit; }
         .btn-success:hover { background: #059669; box-shadow: 0 4px 10px -2px rgba(16,185,129,.4); }
 
         /* ── Tables ──────────────────────────────────────────────────── */
-        table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; font-weight: 800; padding: 10px 12px; border-bottom: 1.5px solid var(--border); }
-        td { padding: 13px 12px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: middle; }
+        table { width: 100%; border-collapse: separate; border-spacing: 0; border: 1.5px solid var(--border); border-radius: var(--radius-sm); }
+        th { text-align: left; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 800; padding: 12px 14px; background: var(--bg); border-bottom: 1.5px solid var(--border-strong); white-space: nowrap; }
+        th:first-child { border-top-left-radius: calc(var(--radius-sm) - 1.5px); }
+        th:last-child { border-top-right-radius: calc(var(--radius-sm) - 1.5px); }
+        td { padding: 14px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: middle; }
         tbody tr:hover td { background: var(--bg); }
         tbody tr:last-child td { border-bottom: none; }
+        tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius-sm) - 1.5px); }
+        tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius-sm) - 1.5px); }
 
         /* ── Badges, alerts, misc ────────────────────────────────────── */
         .badge { background: var(--bg); border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; font-family: 'SFMono-Regular', Consolas, monospace; color: var(--primary); font-size: 11.5px; font-weight: 600; cursor: pointer; }
