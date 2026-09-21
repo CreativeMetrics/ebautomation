@@ -76,8 +76,10 @@
 
     <?php if ($is_admin): ?>
     <div class="card">
-        <h2>🔄 Rigenera Token Webhook</h2>
-        <p class="card-subtitle">Il vecchio URL webhook diventerà <strong>invalido</strong>: aggiornalo subito su Eventbrite dopo la rigenerazione.</p>
+        <h2>🔄 URL Webhook</h2>
+        <p class="card-subtitle">Questo è l'URL attualmente valido: deve essere incollato <strong>esattamente così</strong> nella configurazione webhook di Eventbrite. Se non coincide, Eventbrite invierà un token vecchio/errato e ogni richiesta reale verrà rifiutata (visibile nel tab Log come "token mancante o non valido").</p>
+        <code style="display:block;overflow-wrap:anywhere;margin-bottom:16px;"><?= h($webhook_url) ?></code>
+        <?php if (empty($conf['webhook_token'])): ?><p style="color:var(--warning);font-size:13px;margin-bottom:16px;font-weight:600;">⚠️ Token non generato. Salva la configurazione.</p><?php endif; ?>
         <form method="POST" onsubmit="return confirm('Il vecchio URL diventerà invalido. Continuare?')">
             <input type="hidden" name="action"     value="regenerate_token">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
