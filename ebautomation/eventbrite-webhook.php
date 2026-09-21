@@ -12,14 +12,20 @@ if ($issue = environment_issue()) {
 
 $conf = load_config();
 
-// Verifica token webhook (confronto a tempo costante)
+// Verifica token webhook (confronto a tempo costante). Logga anche il
+// rifiuto (senza esporre il token) perché altrimenti una richiesta
+// bloccata qui non lascerebbe alcuna traccia nel log applicativo,
+// rendendo impossibile distinguere "la richiesta non è mai arrivata"
+// da "è arrivata ma è stata respinta silenziosamente".
 if (!empty($conf['webhook_token']) && !hash_equals($conf['webhook_token'], (string)($_GET['token'] ?? ''))) {
+    write_log('Richiesta webhook rifiutata: token mancante o non valido (IP: ' . ($_SERVER['REMOTE_ADDR'] ?? '?') . ').');
     http_response_code(403);
     exit;
 }
 
 $input = json_decode(file_get_contents('php://input'), true);
 if (!$input || !isset($input['api_url'])) {
+    write_log('Richiesta webhook con payload non valido o api_url mancante.');
     http_response_code(400);
     exit;
 }
