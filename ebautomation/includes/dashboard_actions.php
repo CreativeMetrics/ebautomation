@@ -506,38 +506,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: dashboard.php?tab=strumenti');
                 exit;
             }
-            $sim_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $sim_base   = $sim_scheme . '://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['REQUEST_URI']), '/') . '/';
-            $sim_url    = $sim_base . 'eventbrite-webhook.php' . ($conf['webhook_token'] ? '?token=' . $conf['webhook_token'] : '');
-            $ch = curl_init($sim_url);
-            curl_setopt_array($ch, [
-                CURLOPT_POST           => true,
-                CURLOPT_POSTFIELDS     => json_encode([
-                    'api_url' => "https://www.eventbriteapi.com/v3/orders/{$order_id_sim}/",
-                    'config'  => ['action' => 'order.placed'],
-                ]),
-                CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                // Senza uno User-Agent "normale" alcuni hosting (es. il WAF/antibot
-                // di SiteGround) bloccano con 403 le chiamate del server verso se
-                // stesso prima ancora che raggiungano l'applicazione, mentre le
-                // chiamate reali di Eventbrite (che hanno un User-Agent proprio,
-                // da IP esterno) passano regolarmente.
-                CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; EbAutomationSelfTest/1.0)',
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT        => 30,
-            ]);
-            $sim_body   = curl_exec($ch);
-            $sim_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            if ($sim_status === 200) {
-                $_SESSION['flash_ok'] = "Simulazione inviata (HTTP $sim_status). Controlla il tab Log per i dettagli.";
-            } elseif ($sim_status === 403 && trim((string)$sim_body) !== '') {
-                // Un 403 con corpo non vuoto non viene dalla nostra app (che su
-                // token errato risponde 403 senza contenuto): è quasi certamente
-                // una pagina di blocco del firewall/antibot dell'hosting.
-                $_SESSION['flash_error'] = 'Simulazione bloccata (HTTP 403) prima di raggiungere l\'applicazione: il token webhook è corretto (altrimenti la risposta sarebbe vuota), è probabilmente il firewall/antibot dell\'hosting a bloccare questa chiamata interna del server verso se stesso. Controlla i log di sicurezza nel pannello di hosting.';
+            // Elaborazione in-process (non una richiesta HTTP verso se stessi): un
+            // giro HTTP qui sarebbe comunque superfluo (stesso processo PHP) e su
+            // alcuni hosting con un firewall/antibot aggressivo viene bloccato con
+            // 403 prima ancora di raggiungere l'applicazione, mentre le chiamate
+            // reali di Eventbrite (da IP esterno) passano regolarmente.
+            $sim_result = process_eventbrite_order($conf, "https://www.eventbriteapi.com/v3/orders/{$order_id_sim}/", 'order.placed');
+            if ($sim_result['http_code'] === 200) {
+                $_SESSION['flash_ok'] = $sim_result['message'];
             } else {
-                $_SESSION['flash_error'] = "Simulazione fallita (HTTP $sim_status). Controlla token webhook e configurazione.";
+                $_SESSION['flash_error'] = $sim_result['message'];
             }
             header('Location: dashboard.php?tab=strumenti');
             exit;
@@ -549,33 +527,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: dashboard.php?tab=log');
                 exit;
             }
-            $rf_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $rf_base   = $rf_scheme . '://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['REQUEST_URI']), '/') . '/';
-            $rf_url    = $rf_base . 'eventbrite-webhook.php' . ($conf['webhook_token'] ? '?token=' . $conf['webhook_token'] : '');
-            $rf_ok = 0; $rf_ko = 0;
             foreach ($to_retry as $rf_order_id => $rf_entry) {
-                $ch = curl_init($rf_url);
-                curl_setopt_array($ch, [
-                    CURLOPT_POST           => true,
-                    CURLOPT_POSTFIELDS     => json_encode([
-                        'api_url' => $rf_entry['api_url'] ?? '',
-                        'config'  => ['action' => 'order.placed'],
-                    ]),
-                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                    // Vedi commento su CURLOPT_USERAGENT nel caso 'simulate_webhook':
-                    // senza uno User-Agent "normale" alcuni hosting bloccano con 403
-                    // le chiamate del server verso se stesso.
-                    CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; EbAutomationRetry/1.0)',
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_TIMEOUT        => 30,
-                ]);
-                curl_exec($ch);
-                $rf_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-                if ($rf_status === 200) $rf_ok++; else $rf_ko++;
+                process_eventbrite_order($conf, $rf_entry['api_url'] ?? '', 'order.placed');
             }
-            // Chi è tornato "complete" si è già auto-rimosso dalla coda dentro al webhook;
-            // ricontiamo cosa resta per un messaggio accurato.
+            // Chi è tornato "complete" si è già auto-rimosso dalla coda dentro a
+            // process_eventbrite_order(); ricontiamo cosa resta per un messaggio accurato.
             $still_pending = count(load_failed_orders());
             audit_log('Riprova ordini falliti', count($to_retry) . ' tentati, ' . $still_pending . ' ancora in coda');
             $_SESSION['flash_ok'] = "Ritentati " . count($to_retry) . " ordini. Ancora in coda: $still_pending.";
