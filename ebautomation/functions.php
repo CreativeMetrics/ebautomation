@@ -1361,10 +1361,12 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
             ];
 
             if (($r['tipo_sconto'] ?? 'percentuale') === 'importo') {
-                $discount['amount_off'] = [
-                    'currency' => $conf['currency'] ?: 'EUR',
-                    'value'    => (int)round((float)($r['importo_fisso'] ?? 0) * 100),
-                ];
+                // L'API Eventbrite vuole un numero semplice nella valuta
+                // dell'evento (es. "10.00"), non un oggetto {currency,value}
+                // (quel formato è usato altrove nell'API, es. per il prezzo dei
+                // biglietti, ma non per lo sconto — inviarlo qui viene
+                // rifiutato con "discount.amount_off - Not a valid string").
+                $discount['amount_off'] = number_format((float)($r['importo_fisso'] ?? 0), 2, '.', '');
             } else {
                 $discount['percent_off'] = $r['percentuale'];
             }
