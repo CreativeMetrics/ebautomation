@@ -517,14 +517,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'config'  => ['action' => 'order.placed'],
                 ]),
                 CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                // Senza uno User-Agent "normale" alcuni hosting (es. il WAF/antibot
+                // di SiteGround) bloccano con 403 le chiamate del server verso se
+                // stesso prima ancora che raggiungano l'applicazione, mentre le
+                // chiamate reali di Eventbrite (che hanno un User-Agent proprio,
+                // da IP esterno) passano regolarmente.
+                CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; EbAutomationSelfTest/1.0)',
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT        => 30,
             ]);
-            curl_exec($ch);
+            $sim_body   = curl_exec($ch);
             $sim_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
             if ($sim_status === 200) {
                 $_SESSION['flash_ok'] = "Simulazione inviata (HTTP $sim_status). Controlla il tab Log per i dettagli.";
+            } elseif ($sim_status === 403 && trim((string)$sim_body) !== '') {
+                // Un 403 con corpo non vuoto non viene dalla nostra app (che su
+                // token errato risponde 403 senza contenuto): è quasi certamente
+                // una pagina di blocco del firewall/antibot dell'hosting.
+                $_SESSION['flash_error'] = 'Simulazione bloccata (HTTP 403) prima di raggiungere l\'applicazione: il token webhook è corretto (altrimenti la risposta sarebbe vuota), è probabilmente il firewall/antibot dell\'hosting a bloccare questa chiamata interna del server verso se stesso. Controlla i log di sicurezza nel pannello di hosting.';
             } else {
                 $_SESSION['flash_error'] = "Simulazione fallita (HTTP $sim_status). Controlla token webhook e configurazione.";
             }
@@ -551,6 +562,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'config'  => ['action' => 'order.placed'],
                     ]),
                     CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                    // Vedi commento su CURLOPT_USERAGENT nel caso 'simulate_webhook':
+                    // senza uno User-Agent "normale" alcuni hosting bloccano con 403
+                    // le chiamate del server verso se stesso.
+                    CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; EbAutomationRetry/1.0)',
                     CURLOPT_RETURNTRANSFER => true,
                     CURLOPT_TIMEOUT        => 30,
                 ]);
