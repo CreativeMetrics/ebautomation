@@ -141,12 +141,12 @@
 
     <div class="card">
         <h2>🎪 Eventi Disponibili</h2>
+        <p class="card-subtitle">Eventi di tutte le organizzazioni accessibili al tuo token — trigger e target possono appartenere a organizzazioni diverse.</p>
         <?php if (empty($conf['api_token'])): ?>
             <p style="color:var(--text-faint);">Configura il Token API nella tab <a href="?tab=connessioni">Connessioni</a> per vedere gli eventi.</p>
         <?php elseif (empty($events)): ?>
             <p style="color:var(--text-faint);">Nessun evento trovato. Verifica l'Organization ID nella tab <a href="?tab=connessioni">Connessioni</a>.</p>
         <?php else: ?>
-        <p class="tip" style="margin-top:-14px;margin-bottom:16px;">Eventi di tutte le organizzazioni accessibili al tuo token — trigger e target possono appartenere a organizzazioni diverse.</p>
         <table>
             <thead><tr><th>Evento</th><th>Organizzazione</th><th>Status</th><th>ID</th></tr></thead>
             <tbody>
