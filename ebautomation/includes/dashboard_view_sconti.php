@@ -13,7 +13,7 @@
             <tbody>
             <?php foreach ($regole as $rid => $r):
                 $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
-                $sconto_label = $is_imp ? h((string)($r['importo_fisso'] ?? 0)) . ' ' . h($conf['currency'] ?: 'EUR') : h($r['percentuale']) . '%';
+                $sconto_label = $is_imp ? h((string)($r['importo_fisso'] ?? 0)) . ' ' . h($conf['currency'] ?: 'EUR') : h(format_percentuale((string)($r['percentuale'] ?? '100.00'))) . '%';
                 $r_attiva = $r['attiva'] ?? true;
             ?>
             <tr<?= $r_attiva ? '' : ' style="opacity:.55;"' ?>>

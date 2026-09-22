@@ -330,7 +330,7 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
                     $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
                     $sconto = $is_imp
                         ? number_format((float)($r['importo_fisso'] ?? 0), 2, ',', '.') . ' ' . h($conf['currency'] ?: 'EUR')
-                        : h($r['percentuale'] ?? '100.00') . '%';
+                        : h(format_percentuale((string)($r['percentuale'] ?? '100.00'))) . '%';
                     $scade  = ($r['giorni_scadenza'] ?? 0) > 0 ? h((string)$r['giorni_scadenza']) . ' gg' : 'Mai';
                 ?>
                 <tr>

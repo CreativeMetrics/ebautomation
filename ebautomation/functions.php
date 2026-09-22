@@ -889,6 +889,16 @@ function h(string $s): string {
 }
 
 /**
+ * Percentuale senza zeri decimali superflui, per la visualizzazione
+ * (10.00 -> "10", 12.50 -> "12.5", 33.33 resta invariato). Il valore
+ * memorizzato resta number_format(...,2,...) per coerenza/precisione;
+ * questo serve solo a non mostrare ",00"/".00" dove non aggiunge nulla.
+ */
+function format_percentuale(string $p): string {
+    return str_contains($p, '.') ? rtrim(rtrim($p, '0'), '.') : $p;
+}
+
+/**
  * Verifica che l'ambiente PHP abbia il necessario per far funzionare l'app
  * (estensioni pdo_sqlite e sodium, cartella scrivibile) PRIMA di toccare
  * config/utenti tramite db(). Senza questo controllo, un hosting con
@@ -1485,7 +1495,7 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
                 'desc'  => $r['descrizione'] ?? '',
                 'code'  => ($r['codice_prefix'] ?? 'GIFT') . '-' . strtoupper(substr(md5($order_id . $t_id), 0, 8)),
                 'url'   => 'https://www.eventbrite.it/e/' . $t_id,
-                'label' => $is_imp ? ($r['importo_fisso'] ?? '?') . ' ' . ($conf['currency'] ?: 'EUR') : $r['percentuale'] . '%',
+                'label' => $is_imp ? ($r['importo_fisso'] ?? '?') . ' ' . ($conf['currency'] ?: 'EUR') : format_percentuale((string)($r['percentuale'] ?? '100.00')) . '%',
             ];
         }
     }
