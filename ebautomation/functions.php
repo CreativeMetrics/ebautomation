@@ -1438,7 +1438,15 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
     // ad ogni retry quando non c'è nulla di cambiato).
     $targets_to_email   = array_diff(array_keys($discounts), $existing_emailed);
     $email_sent_targets = $existing_emailed;
-    $email_ok           = empty($targets_to_email) && !empty($existing_emailed); // niente da inviare = ok
+    // Niente da inviare = ok, sia perché è già stato inviato tutto in un
+    // tentativo precedente sia perché l'ordine non ha semplicemente sconti
+    // da comunicare (es. nessuna regola configurata per gli eventi
+    // acquistati — caso comune, dato che Eventbrite invia order.placed per
+    // ogni ordine dell'account, non solo per quelli con una regola). Prima
+    // richiedeva anche !empty($existing_emailed), il che marcava per errore
+    // come "non completato" (e rimetteva in coda per sempre) ogni ordine
+    // senza alcuna regola corrispondente.
+    $email_ok           = empty($targets_to_email);
 
     if (!empty($regali_finali) && !empty($targets_to_email)) {
         $recipient = filter_var($order['email'] ?? '', FILTER_VALIDATE_EMAIL);
