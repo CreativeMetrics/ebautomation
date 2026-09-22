@@ -1065,13 +1065,21 @@ function claim_processed_order(string $order_id, bool $allow_reopen = false): ar
         $stmt->execute([$order_id]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
+        // Un ordine rimborsato (vedi mark_order_refunded) resta chiuso per
+        // sempre, anche con allow_reopen: un order.updated arrivato dopo un
+        // order.refunded (capita, es. cancellando l'intero evento su
+        // Eventbrite) non deve poter ricreare gli sconti appena eliminati.
+        if ($row && $row['status'] === 'refunded') {
+            return ['already_complete' => true, 'refunded' => true, 'discounts' => [], 'email_sent_targets' => []];
+        }
+
         // $allow_reopen (usato per order.updated): riapre per rivalutazione
         // anche un ordine già completo, es. se l'ordine è stato modificato
         // dopo l'invio iniziale (quantità aumentata sopra una soglia
         // qty_minima, nuovo evento aggiunto all'ordine). Non revoca mai
         // sconti già creati: la pipeline a valle crea solo quelli mancanti.
         if ($row && $row['status'] === 'complete' && !$allow_reopen) {
-            return ['already_complete' => true, 'discounts' => [], 'email_sent_targets' => []];
+            return ['already_complete' => true, 'refunded' => false, 'discounts' => [], 'email_sent_targets' => []];
         }
 
         $discounts = $row ? (json_decode($row['discounts'], true) ?: []) : [];
@@ -1079,13 +1087,31 @@ function claim_processed_order(string $order_id, bool $allow_reopen = false): ar
         $pdo->prepare('INSERT OR REPLACE INTO processed_orders (order_id, ts, status, discounts, email_sent_targets) VALUES (?,?,?,?,?)')
             ->execute([$order_id, time(), 'partial', json_encode($discounts), json_encode($emailed)]);
 
-        return ['already_complete' => false, 'discounts' => $discounts, 'email_sent_targets' => $emailed];
+        return ['already_complete' => false, 'refunded' => false, 'discounts' => $discounts, 'email_sent_targets' => $emailed];
     });
 }
 
 function finalize_processed_order(string $order_id, array $discounts, array $email_sent_targets, bool $is_complete): void {
     db()->prepare('INSERT OR REPLACE INTO processed_orders (order_id, ts, status, discounts, email_sent_targets) VALUES (?,?,?,?,?)')
         ->execute([$order_id, time(), $is_complete ? 'complete' : 'partial', json_encode($discounts), json_encode($email_sent_targets)]);
+}
+
+/**
+ * Marca un ordine come rimborsato: da questo momento claim_processed_order()
+ * lo considera definitivamente chiuso, così un order.updated/order.placed
+ * arrivato DOPO il rimborso per lo stesso ordine (es. Eventbrite può inviarli
+ * entrambi ravvicinati cancellando un evento) non può più ricreare gli
+ * sconti appena eliminati né reinviare l'email — bug osservato in pratica:
+ * cancellare un evento su Eventbrite genera sia order.refunded sia
+ * order.updated per ogni ordine coinvolto, e senza questo marcatore il
+ * secondo vanificava silenziosamente il rimborso appena processato.
+ */
+function mark_order_refunded(string $order_id): void {
+    $entry     = get_processed_order($order_id);
+    $discounts = $entry['discounts'] ?? [];
+    $emailed   = $entry['email_sent_targets'] ?? [];
+    db()->prepare('INSERT OR REPLACE INTO processed_orders (order_id, ts, status, discounts, email_sent_targets) VALUES (?,?,?,?,?)')
+        ->execute([$order_id, time(), 'refunded', json_encode($discounts), json_encode($emailed)]);
 }
 
 /** Voce grezza per il flusso rimborsi (legge gli sconti tracciati per un ordine, se esiste). */
@@ -1335,6 +1361,7 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
         $disc_ids = $entry ? array_values($entry['discounts']) : [];
 
         if (empty($disc_ids)) {
+            mark_order_refunded($order_id);
             write_log("Rimborso ordine $order_id: nessun codice sconto tracciato, niente da eliminare.");
             return ['http_code' => 200, 'message' => "Rimborso ordine $order_id: nessun codice sconto tracciato."];
         }
@@ -1355,6 +1382,10 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
                 write_log("ERRORE eliminazione sconto $disc_id per ordine $order_id. HTTP: {$res['status']}");
             }
         }
+        // Marcato rimborsato anche se qualche DELETE è fallito: un ordine
+        // rimborsato non deve mai più generare un nuovo sconto/email per un
+        // order.updated successivo, indipendentemente dall'esito qui sopra.
+        mark_order_refunded($order_id);
         return ['http_code' => 200, 'message' => "Rimborso ordine $order_id: $eliminati/" . count($disc_ids) . ' sconto/i eliminato/i.'];
     }
 
@@ -1376,6 +1407,10 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
     // la vera idempotenza — a meno che non sia un order.updated (vedi sopra).
     $claim = claim_processed_order($order_id, $action === 'order.updated');
     if ($claim['already_complete']) {
+        if ($claim['refunded'] ?? false) {
+            write_log("Ordine $order_id già rimborsato: ignoro \"$action\" per non ricreare sconti già eliminati.");
+            return ['http_code' => 200, 'message' => "Ordine $order_id già rimborsato: nessuna azione."];
+        }
         write_log("Ordine $order_id già completato. Skip.");
         return ['http_code' => 200, 'message' => "Ordine $order_id già completato in precedenza."];
     }

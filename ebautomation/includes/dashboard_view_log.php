@@ -146,7 +146,14 @@
                 <tr>
                     <td><span class="badge"><?= h($oid) ?></span></td>
                     <td style="color:#64748b;"><?= date('d/m/Y H:i:s', $v['ts']) ?></td>
-                    <td><?= $v['status'] === 'partial' ? '<span style="color:#f59e0b;font-weight:700;">⚠ parziale</span>' : ($v['status'] === 'complete' ? '<span style="color:#10b981;">✓ completo</span>' : '—') ?></td>
+                    <td><?php
+                        $status_labels = [
+                            'partial'  => '<span style="color:#f59e0b;font-weight:700;">⚠ parziale</span>',
+                            'complete' => '<span style="color:#10b981;">✓ completo</span>',
+                            'refunded' => '<span style="color:#64748b;">↩ rimborsato</span>',
+                        ];
+                        echo $status_labels[$v['status']] ?? '—';
+                    ?></td>
                     <td style="color:#64748b;"><?= count($v['discounts']) ?></td>
                 </tr>
             <?php endforeach; ?>

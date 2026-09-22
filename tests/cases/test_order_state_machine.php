@@ -70,6 +70,26 @@ check($c1['already_complete'] === false && $c2['already_complete'] === false, 'd
 $o3 = get_processed_order($order_id3);
 check($o3['status'] === 'partial', 'lo stato resta "partial" finché nessuno chiama finalize', $failures);
 
+// Rimborso: un ordine marcato rimborsato resta chiuso anche a un successivo
+// order.updated (allow_reopen=true) — bug osservato in pratica: cancellare
+// un evento su Eventbrite genera sia order.refunded sia order.updated per
+// lo stesso ordine, e senza questo blocco il secondo ricreava lo sconto
+// appena eliminato dal primo.
+$order_id4 = 'ORD-4';
+claim_processed_order($order_id4);
+finalize_processed_order($order_id4, ['target-R' => 'disc-R'], ['target-R'], true);
+mark_order_refunded($order_id4);
+$o5 = get_processed_order($order_id4);
+check($o5['status'] === 'refunded', 'mark_order_refunded imposta lo stato "refunded"', $failures);
+check($o5['discounts'] === ['target-R' => 'disc-R'], 'mark_order_refunded preserva la cronologia sconti/email per riferimento', $failures);
+
+$claim5 = claim_processed_order($order_id4, false); // come un order.placed duplicato
+check($claim5['already_complete'] === true && ($claim5['refunded'] ?? false) === true, 'un ordine rimborsato risulta already_complete + refunded a un nuovo claim', $failures);
+
+$claim6 = claim_processed_order($order_id4, true); // come un order.updated: NON deve riaprire
+check($claim6['already_complete'] === true && ($claim6['refunded'] ?? false) === true, 'order.updated (allow_reopen) NON riapre un ordine rimborsato', $failures);
+check($claim6['discounts'] === [], 'il claim su un ordine rimborsato non restituisce sconti da rielaborare', $failures);
+
 if ($failures) {
     fwrite(STDERR, implode("\n", $failures) . "\n");
     exit(1);
