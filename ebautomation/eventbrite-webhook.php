@@ -32,11 +32,33 @@ if (!$input || !isset($input['api_url'])) {
 
 $action = $input['config']['action'] ?? 'order.placed';
 
+// Rispondiamo subito con 200 a Eventbrite, PRIMA di iniziare il lavoro
+// pesante (recupero ordine, creazione sconti — una o più regole condivise
+// sullo stesso trigger — invio email via SMTP), che nel complesso può
+// richiedere diversi secondi. Eventbrite ha un timeout piuttosto stretto
+// sulla risposta del webhook: se lo aspettiamo prima di rispondere, rischia
+// di chiudere la connessione per timeout. Peggio ancora, senza
+// ignore_user_abort(true) PHP interromperebbe lo script A METÀ non appena
+// il client si disconnette — prima ancora di poter scrivere una riga di
+// log o mettere l'ordine in coda "falliti", facendo sparire l'intera
+// elaborazione senza lasciarne traccia (il bug osservato in produzione).
+ignore_user_abort(true);
+set_time_limit(120);
+http_response_code(200);
+if (function_exists('fastcgi_finish_request')) {
+    // Chiude subito la connessione col client (Eventbrite): lo script PHP
+    // continua comunque a girare normalmente fino alla fine. Non disponibile
+    // fuori da PHP-FPM (es. server di sviluppo built-in): in quel caso si
+    // procede comunque, solo senza il vantaggio della risposta anticipata.
+    flush();
+    fastcgi_finish_request();
+}
+
 // Tutta la logica di elaborazione (validazione api_url, recupero ordine,
 // creazione sconti, invio email, persistenza stato) vive in
 // process_eventbrite_order() — vedi functions.php — così è richiamabile
 // anche in-process dagli strumenti della dashboard ("Simula Ordine",
 // "Riprova ordini falliti") senza passare da una chiamata HTTP verso se
-// stessi.
-$result = process_eventbrite_order($conf, $input['api_url'], $action);
-http_response_code($result['http_code']);
+// stessi. Il suo http_code di ritorno non serve più a questo punto: la
+// risposta a Eventbrite è già stata inviata sopra.
+process_eventbrite_order($conf, $input['api_url'], $action);
