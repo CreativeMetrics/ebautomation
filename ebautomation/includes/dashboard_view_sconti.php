@@ -7,16 +7,17 @@
 
     <div class="card">
         <h2>Automazioni Attive <a href="?action=export_regole" class="btn btn-secondary" style="margin-left:auto;font-size:12px;padding:8px 14px;">⬇ Esporta JSON</a></h2>
+        <p class="tip" style="margin-top:-14px;margin-bottom:16px;">Più regole possono condividere lo stesso evento trigger, ciascuna con target e sconto propri.</p>
         <table>
             <thead><tr><th>Trigger</th><th>Descrizione</th><th>Sconto</th><th>Qtà</th><th>Min. trigger</th><th>Scade</th><th>Target</th><th>Stato</th><th></th></tr></thead>
             <tbody>
-            <?php foreach ($regole as $tid => $r):
+            <?php foreach ($regole as $rid => $r):
                 $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
                 $sconto_label = $is_imp ? h((string)($r['importo_fisso'] ?? 0)) . ' ' . h($conf['currency'] ?: 'EUR') : h($r['percentuale']) . '%';
                 $r_attiva = $r['attiva'] ?? true;
             ?>
             <tr<?= $r_attiva ? '' : ' style="opacity:.55;"' ?>>
-                <td><span class="badge"><?= h($tid) ?></span></td>
+                <td><span class="badge"><?= h($r['trigger_id'] ?? '') ?></span></td>
                 <td><strong><?= h($r['descrizione']) ?></strong></td>
                 <td><?= $sconto_label ?></td>
                 <td><?= h((string)($r['quantita'] ?? 1)) ?></td>
@@ -28,7 +29,7 @@
                     <form method="POST" style="display:inline;">
                         <input type="hidden" name="action"     value="toggle_regola">
                         <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-                        <input type="hidden" name="trigger_id" value="<?= h($tid) ?>">
+                        <input type="hidden" name="rule_id"    value="<?= h($rid) ?>">
                         <button type="submit" class="btn btn-secondary" style="font-size:11px;padding:6px 10px;<?= $r_attiva ? '' : 'background:#f59e0b;' ?>" title="<?= $r_attiva ? 'Disattiva questa regola' : 'Riattiva questa regola' ?>">
                             <?= $r_attiva ? '✓ attiva' : '⏸ disattiva' ?>
                         </button>
@@ -40,11 +41,11 @@
                 <td>
                     <?php if ($is_admin): ?>
                     <div class="row-actions">
-                        <a href="?tab=sconti&edit=<?= urlencode($tid) ?>" class="icon-btn icon-info" title="Modifica regola"><?= icon_svg('pencil') ?></a>
+                        <a href="?tab=sconti&edit=<?= urlencode($rid) ?>" class="icon-btn icon-info" title="Modifica regola"><?= icon_svg('pencil') ?></a>
                         <form method="POST" onsubmit="return confirm('Eliminare questa regola?')">
                             <input type="hidden" name="action"     value="delete_regola">
                             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
-                            <input type="hidden" name="trigger_id" value="<?= h($tid) ?>">
+                            <input type="hidden" name="rule_id"    value="<?= h($rid) ?>">
                             <button type="submit" class="icon-btn icon-danger" title="Elimina regola"><?= icon_svg('trash') ?></button>
                         </form>
                     </div>
@@ -60,14 +61,16 @@
     <?php if ($is_admin): ?>
     <div class="card <?= $edit_rule ? 'edit-highlight' : '' ?>">
         <h2><?= $edit_rule ? '✏️ Modifica Regola' : 'Nuova Regola' ?></h2>
-        <?php if ($edit_rule): ?><p style="color:#92400e;font-size:13px;margin-top:-10px;">Trigger: <strong><?= h($edit_id) ?></strong></p><?php endif; ?>
+        <?php if ($edit_rule): ?><p style="color:#92400e;font-size:13px;margin-top:-10px;">Trigger: <strong><?= h($edit_rule['trigger_id'] ?? '') ?></strong></p><?php endif; ?>
         <form method="POST">
             <input type="hidden" name="action"     value="save_regola">
             <input type="hidden" name="csrf_token" value="<?= h($csrf) ?>">
+            <input type="hidden" name="rule_id"    value="<?= h($edit_id ?? '') ?>">
             <div class="grid">
                 <div class="input-group">
                     <label>ID Evento Trigger</label>
-                    <input type="text" name="trigger_id" id="f_t" value="<?= h($edit_id ?? '') ?>" <?= $edit_rule ? 'readonly style="background:#f1f5f9;"' : '' ?> required>
+                    <input type="text" name="trigger_id" id="f_t" value="<?= h($edit_rule['trigger_id'] ?? '') ?>" <?= $edit_rule ? 'readonly style="background:#f1f5f9;"' : '' ?> required>
+                    <?php if (!$edit_rule): ?><span class="tip">Puoi riusare l'ID di un trigger già usato da un'altra regola: creerai una regola aggiuntiva, indipendente, con target e sconto propri.</span><?php endif; ?>
                 </div>
                 <div class="input-group">
                     <label>ID Target (separati da ,)</label>

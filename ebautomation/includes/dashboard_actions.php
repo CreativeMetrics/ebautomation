@@ -305,8 +305,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
 
         case 'save_regola':
-            $regole = load_regole();
-            $tid    = trim($_POST['trigger_id'] ?? '');
+            $regole  = load_regole();
+            $tid     = trim($_POST['trigger_id'] ?? '');
+            // rule_id vuoto = nuova regola (ne genera uno nuovo, anche se il
+            // trigger_id coincide con quello di una regola già esistente:
+            // più regole possono condividere lo stesso trigger). Valorizzato
+            // = si sta modificando quella specifica regola.
+            $rule_id = trim($_POST['rule_id'] ?? '');
             if ($tid) {
                 $targets = array_values(array_unique(array_filter(array_map('trim', explode(',', $_POST['target_id'] ?? '')))));
                 $tipo    = ($_POST['tipo_sconto'] ?? '') === 'importo' ? 'importo' : 'percentuale';
@@ -338,7 +343,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                $regole[$tid] = [
+                $rule_data = [
                     'descrizione'     => trim($_POST['descrizione']    ?? ''),
                     'tipo_sconto'     => $tipo,
                     'percentuale'     => number_format(max(1.0, min(100.0, (float)($_POST['percentuale'] ?? 100))), 2, '.', ''),
@@ -354,12 +359,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'qty_minima'      => max(1, (int)($_POST['qty_minima']      ?? 1)),
                     // Modificare una regola dal form non la riattiva/disattiva:
                     // preserva lo stato attuale (true se è una regola nuova).
-                    'attiva'          => $regole[$tid]['attiva'] ?? true,
+                    'attiva'          => $regole[$rule_id]['attiva'] ?? true,
                     // Lingua del template email da usare per questa regola;
                     // vuoto = usa il template predefinito (vedi get_email_template).
                     'lingua'          => trim($_POST['lingua'] ?? ''),
                 ];
-                save_regola_rule($tid, $regole[$tid]);
+                if ($rule_id === '') $rule_id = bin2hex(random_bytes(8));
+                save_regola_rule($rule_id, $tid, $rule_data);
                 audit_log('Regola salvata', $tid);
 
                 if (!empty($ev_names)) {
@@ -375,22 +381,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
 
         case 'delete_regola':
-            $tid = trim($_POST['trigger_id'] ?? '');
-            if ($tid) {
-                delete_regola_rule($tid);
-                audit_log('Regola eliminata', $tid);
+            $rid = trim($_POST['rule_id'] ?? '');
+            if ($rid) {
+                delete_regola_rule($rid);
+                audit_log('Regola eliminata', $rid);
                 header('Location: dashboard.php?tab=sconti&msg=ok');
                 exit;
             }
             break;
 
         case 'toggle_regola':
-            $tid    = trim($_POST['trigger_id'] ?? '');
+            $rid    = trim($_POST['rule_id'] ?? '');
             $regole = load_regole();
-            if ($tid && isset($regole[$tid])) {
-                $regole[$tid]['attiva'] = !($regole[$tid]['attiva'] ?? true);
-                save_regola_rule($tid, $regole[$tid]);
-                audit_log($regole[$tid]['attiva'] ? 'Regola riattivata' : 'Regola disattivata', $tid);
+            if ($rid && isset($regole[$rid])) {
+                $regole[$rid]['attiva'] = !($regole[$rid]['attiva'] ?? true);
+                save_regola_rule($rid, $regole[$rid]['trigger_id'], $regole[$rid]);
+                audit_log($regole[$rid]['attiva'] ? 'Regola riattivata' : 'Regola disattivata', $regole[$rid]['trigger_id']);
                 header('Location: dashboard.php?tab=sconti');
                 exit;
             }
@@ -428,28 +434,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $fh = fopen($_FILES['regole_csv']['tmp_name'], 'r');
             $header = $fh ? fgetcsv($fh) : null;
-            $expected_header      = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua'];
-            $expected_header_old  = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva']; // esportato prima dell'introduzione della colonna lingua
+            // Formato attuale: colonna "id" separata da "trigger_id", perché più
+            // regole possono condividere lo stesso trigger. I due formati legacy
+            // (da prima di questa possibilità) restano importabili: lì id=trigger_id.
+            $expected_header      = ['id', 'trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua'];
+            $expected_header_legacy      = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua'];
+            $expected_header_legacy_old  = ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva']; // esportato prima dell'introduzione della colonna lingua
             $header_norm = $header ? array_map('trim', $header) : [];
-            if ($header_norm !== $expected_header && $header_norm !== $expected_header_old) {
+            $has_id_col = $header_norm === $expected_header;
+            if (!$has_id_col && $header_norm !== $expected_header_legacy && $header_norm !== $expected_header_legacy_old) {
                 $_SESSION['flash_error'] = 'Intestazione CSV non valida. Usa un file esportato da questa dashboard (' . implode(',', $expected_header) . ').';
                 header('Location: dashboard.php?tab=strumenti');
                 exit;
             }
-            $has_lingua_col = $header_norm === $expected_header;
+            $has_lingua_col = $header_norm === $expected_header || $header_norm === $expected_header_legacy;
             $imported_csv = [];
             $csv_error = null;
+            $min_cols = $has_id_col ? count($expected_header) : count($expected_header_legacy_old);
             while (($row = fgetcsv($fh)) !== false) {
-                if (count($row) < count($expected_header_old)) continue; // riga vuota/incompleta, ignorata
-                $lingua = $has_lingua_col ? ($row[11] ?? '') : '';
-                [$tid, $descr, $tipo, $perc, $imp, $prefix, $targets_raw, $qta, $giorni, $qtymin, $attiva] = $row;
+                if (count($row) < $min_cols) continue; // riga vuota/incompleta, ignorata
+                if ($has_id_col) {
+                    $lingua = $has_lingua_col ? ($row[12] ?? '') : '';
+                    [$rid, $tid, $descr, $tipo, $perc, $imp, $prefix, $targets_raw, $qta, $giorni, $qtymin, $attiva] = $row;
+                    $rid = trim($rid);
+                } else {
+                    $lingua = $has_lingua_col ? ($row[11] ?? '') : '';
+                    [$tid, $descr, $tipo, $perc, $imp, $prefix, $targets_raw, $qta, $giorni, $qtymin, $attiva] = $row;
+                    $rid = trim($tid); // formato legacy: una sola regola per trigger, id=trigger_id
+                }
                 $tid = trim($tid);
                 $targets = array_values(array_filter(array_map('trim', explode('|', $targets_raw))));
-                if ($tid === '' || empty($targets)) {
-                    $csv_error = "Riga non valida (trigger_id o target_ids mancanti): " . implode(',', $row);
+                if ($rid === '' || $tid === '' || empty($targets)) {
+                    $csv_error = "Riga non valida (id, trigger_id o target_ids mancanti): " . implode(',', $row);
                     break;
                 }
-                $imported_csv[$tid] = [
+                $imported_csv[$rid] = [
+                    'trigger_id'      => $tid,
                     'descrizione'     => trim($descr),
                     'tipo_sconto'     => $tipo === 'importo' ? 'importo' : 'percentuale',
                     'percentuale'     => number_format(max(1.0, min(100.0, (float)($perc ?: 100))), 2, '.', ''),

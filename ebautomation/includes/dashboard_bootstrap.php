@@ -103,10 +103,11 @@ if (($_GET['action'] ?? '') === 'export_regole_csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="regole_sconti_' . date('Y-m-d') . '.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua']);
-    foreach (load_regole() as $tid => $r) {
+    fputcsv($out, ['id', 'trigger_id', 'descrizione', 'tipo_sconto', 'percentuale', 'importo_fisso', 'codice_prefix', 'target_ids', 'quantita', 'giorni_scadenza', 'qty_minima', 'attiva', 'lingua']);
+    foreach (load_regole() as $rid => $r) {
         fputcsv($out, [
-            $tid,
+            $rid,
+            $r['trigger_id'] ?? '',
             $r['descrizione'] ?? '',
             $r['tipo_sconto'] ?? 'percentuale',
             $r['percentuale'] ?? '',

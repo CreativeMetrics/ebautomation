@@ -326,7 +326,7 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($regole as $tid => $r):
+                <?php foreach ($regole as $r):
                     $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
                     $sconto = $is_imp
                         ? number_format((float)($r['importo_fisso'] ?? 0), 2, ',', '.') . ' ' . h($conf['currency'] ?: 'EUR')
@@ -334,7 +334,7 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
                     $scade  = ($r['giorni_scadenza'] ?? 0) > 0 ? h((string)$r['giorni_scadenza']) . ' gg' : 'Mai';
                 ?>
                 <tr>
-                    <td><span class="code"><?= h($tid) ?></span></td>
+                    <td><span class="code"><?= h($r['trigger_id'] ?? '') ?></span></td>
                     <td><?= h($r['descrizione'] ?? '') ?></td>
                     <td style="font-weight:700;"><?= $sconto ?></td>
                     <td><span class="code"><?= h($r['codice_prefix'] ?? 'GIFT') ?></span></td>

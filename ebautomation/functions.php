@@ -66,14 +66,48 @@ function db(): PDO {
     $pdo->exec('PRAGMA busy_timeout = 5000');  // attende invece di fallire subito se il DB è momentaneamente locked
     $pdo->exec('PRAGMA foreign_keys = ON');
     ensure_schema($pdo);
+    migrate_regole_schema_if_needed($pdo);
     migrate_legacy_json_if_needed($pdo);
     migrate_email_templates_if_needed($pdo);
     return $pdo;
 }
 
+/**
+ * Evolve lo schema della tabella regole da quello precedente (trigger_id
+ * come chiave primaria, quindi una sola regola per evento trigger) a quello
+ * attuale (id autogenerato come chiave, trigger_id solo indicizzato): serve
+ * per permettere più regole con lo stesso evento trigger, ciascuna con i
+ * propri target e sconto. SQLite non supporta di modificare una chiave
+ * primaria con ALTER TABLE, quindi la tabella va ricreata; per le regole
+ * già esistenti id = trigger_id, così restano raggiungibili con lo stesso
+ * link "Modifica" di prima e il comportamento non cambia finché non si
+ * aggiunge volontariamente una seconda regola sullo stesso trigger.
+ */
+function migrate_regole_schema_if_needed(PDO $pdo): void {
+    $cols = $pdo->query('PRAGMA table_info(regole)')->fetchAll(PDO::FETCH_COLUMN, 1);
+    if (in_array('id', $cols, true)) return; // già nel nuovo schema
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        $pdo->exec('ALTER TABLE regole RENAME TO regole_old_schema');
+        $pdo->exec('CREATE TABLE regole (id TEXT PRIMARY KEY, trigger_id TEXT NOT NULL, data TEXT)');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_regole_trigger_id ON regole(trigger_id)');
+        $pdo->exec('INSERT INTO regole (id, trigger_id, data) SELECT trigger_id, trigger_id, data FROM regole_old_schema');
+        $pdo->exec('DROP TABLE regole_old_schema');
+        $pdo->exec('COMMIT');
+    } catch (Throwable $e) {
+        $pdo->exec('ROLLBACK');
+        throw $e;
+    }
+}
+
 function ensure_schema(PDO $pdo): void {
     $pdo->exec('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)');
-    $pdo->exec('CREATE TABLE IF NOT EXISTS regole (trigger_id TEXT PRIMARY KEY, data TEXT)');
+    // id è la chiave della singola regola (autogenerato); trigger_id NON è
+    // più univoco, perché più regole possono condividere lo stesso evento
+    // trigger con target e sconti diversi (vedi migrate_regole_schema_if_needed
+    // per l'evoluzione dallo schema precedente, dove trigger_id era la PK).
+    $pdo->exec('CREATE TABLE IF NOT EXISTS regole (id TEXT PRIMARY KEY, trigger_id TEXT NOT NULL, data TEXT)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_regole_trigger_id ON regole(trigger_id)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS processed_orders (
         order_id TEXT PRIMARY KEY, ts INTEGER, status TEXT, discounts TEXT, email_sent_targets TEXT
     )');
@@ -162,8 +196,8 @@ function migrate_legacy_json_if_needed(PDO $pdo): void {
 
         if (file_exists($legacy_regole)) {
             $regole = json_decode(file_get_contents($legacy_regole), true) ?: [];
-            $stmt = $pdo->prepare('INSERT OR REPLACE INTO regole (trigger_id, data) VALUES (?, ?)');
-            foreach ($regole as $tid => $rule) $stmt->execute([(string)$tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO regole (id, trigger_id, data) VALUES (?, ?, ?)');
+            foreach ($regole as $tid => $rule) $stmt->execute([(string)$tid, (string)$tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
         }
 
         if (file_exists($legacy_proc)) {
@@ -412,30 +446,53 @@ function maybe_backup_database(): void {
 
 // ── REGOLE SCONTI ─────────────────────────────────────────────────────────────
 
+/**
+ * Restituisce tutte le regole indicizzate per id (non più per trigger_id:
+ * più regole possono condividere lo stesso evento trigger). Ogni regola
+ * riporta comunque il proprio 'trigger_id', così il chiamante non deve mai
+ * consultare la tabella per saperlo.
+ */
 function load_regole(): array {
-    $rows = db()->query('SELECT trigger_id, data FROM regole')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $rows = db()->query('SELECT id, trigger_id, data FROM regole')->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
-    foreach ($rows as $tid => $json) $out[$tid] = json_decode($json, true) ?: [];
+    foreach ($rows as $row) {
+        $rule = json_decode($row['data'], true) ?: [];
+        $rule['trigger_id'] = $row['trigger_id'];
+        $out[$row['id']] = $rule;
+    }
     return $out;
 }
 
-function save_regola_rule(string $trigger_id, array $rule): void {
+/** $rule_id vuoto o non ancora esistente = crea una nuova regola. */
+function save_regola_rule(string $rule_id, string $trigger_id, array $rule): void {
     make_regole_backup();
-    db()->prepare('INSERT OR REPLACE INTO regole (trigger_id, data) VALUES (?, ?)')
-        ->execute([$trigger_id, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+    unset($rule['trigger_id']); // ridondante: sta nella colonna dedicata, non nel JSON
+    db()->prepare('INSERT OR REPLACE INTO regole (id, trigger_id, data) VALUES (?, ?, ?)')
+        ->execute([$rule_id, $trigger_id, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
 }
 
-function delete_regola_rule(string $trigger_id): void {
+function delete_regola_rule(string $rule_id): void {
     make_regole_backup();
-    db()->prepare('DELETE FROM regole WHERE trigger_id = ?')->execute([$trigger_id]);
+    db()->prepare('DELETE FROM regole WHERE id = ?')->execute([$rule_id]);
 }
 
+/**
+ * Sostituzione totale (import JSON/CSV). Ogni regola può indicare il proprio
+ * 'trigger_id'; se assente (export nel vecchio formato, da prima che una
+ * regola potesse avere un id diverso dal trigger) si assume che la chiave
+ * dell'array sia sia l'id sia il trigger_id, per compatibilità con i file
+ * esportati in precedenza.
+ */
 function replace_all_regole(array $regole): void {
     make_regole_backup();
     db_atomic(function (PDO $pdo) use ($regole) {
         $pdo->exec('DELETE FROM regole');
-        $stmt = $pdo->prepare('INSERT INTO regole (trigger_id, data) VALUES (?, ?)');
-        foreach ($regole as $tid => $rule) $stmt->execute([(string)$tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+        $stmt = $pdo->prepare('INSERT INTO regole (id, trigger_id, data) VALUES (?, ?, ?)');
+        foreach ($regole as $rid => $rule) {
+            $tid = (string)($rule['trigger_id'] ?? $rid);
+            unset($rule['trigger_id']);
+            $stmt->execute([(string)$rid, $tid, json_encode($rule, JSON_UNESCAPED_UNICODE)]);
+        }
     });
 }
 
@@ -1329,15 +1386,16 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
         $eid = $att['event_id'] ?? null;
         if ($eid) $qty_per_evento[$eid] = ($qty_per_evento[$eid] ?? 0) + 1;
     }
-    $eventi_acquistati = array_keys($qty_per_evento);
-
     $discounts         = $existing_discounts; // target_id => discount_id (riparte da eventuali successi precedenti)
     $attempted_targets = [];                  // target_id di tutte le regole che dovrebbero attivarsi su questo ordine
 
-    // Creazione sconti (i target già presenti in $discounts non vengono ricreati)
-    foreach ($eventi_acquistati as $e_id) {
-        if (!isset($regole[$e_id])) continue;
-        $r = $regole[$e_id];
+    // Creazione sconti (i target già presenti in $discounts non vengono ricreati).
+    // Iteriamo su TUTTE le regole (non solo sugli eventi acquistati) perché più
+    // regole possono condividere lo stesso evento trigger con target/sconti
+    // diversi: non c'è più un'unica regola per trigger da guardare direttamente.
+    foreach ($regole as $r) {
+        $e_id = $r['trigger_id'] ?? '';
+        if ($e_id === '' || !isset($qty_per_evento[$e_id])) continue; // trigger non acquistato in quest'ordine
 
         if (($r['attiva'] ?? true) === false) continue; // regola disattivata dalla dashboard
 
@@ -1418,7 +1476,7 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
     // non vanificare la logica "un cliente riceve un'unica email con tutto").
     $regali_finali = [];
     $chosen_lingua = null;
-    foreach ($regole as $e_id => $r) {
+    foreach ($regole as $r) {
         foreach (($r['target_ids'] ?? []) as $t_id) {
             if (!isset($discounts[$t_id]) || isset($regali_finali[$t_id])) continue;
             if ($chosen_lingua === null) $chosen_lingua = ($r['lingua'] ?? '') ?: null;
