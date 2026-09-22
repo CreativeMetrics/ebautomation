@@ -342,7 +342,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'descrizione'     => trim($_POST['descrizione']    ?? ''),
                     'tipo_sconto'     => $tipo,
                     'percentuale'     => number_format(max(1.0, min(100.0, (float)($_POST['percentuale'] ?? 100))), 2, '.', ''),
-                    'importo_fisso'   => max(0.0, (float)($_POST['importo_fisso'] ?? 0)),
+                    // L'API Eventbrite richiede un amount_off tra 0.01 e
+                    // 99999.99: senza questo vincolo, una regola a importo
+                    // fisso lasciata a 0 (campo vuoto) farebbe fallire la
+                    // creazione dello sconto con "Not a valid string".
+                    'importo_fisso'   => number_format(max(0.01, min(99999.99, (float)($_POST['importo_fisso'] ?? 0.01))), 2, '.', ''),
                     'codice_prefix'   => substr(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($_POST['codice_prefix'] ?? 'GIFT'))), 0, 10) ?: 'GIFT',
                     'target_ids'      => $targets,
                     'quantita'        => max(1, (int)($_POST['quantita']        ?? 1)),
@@ -449,7 +453,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'descrizione'     => trim($descr),
                     'tipo_sconto'     => $tipo === 'importo' ? 'importo' : 'percentuale',
                     'percentuale'     => number_format(max(1.0, min(100.0, (float)($perc ?: 100))), 2, '.', ''),
-                    'importo_fisso'   => max(0.0, (float)$imp),
+                    'importo_fisso'   => number_format(max(0.01, min(99999.99, (float)($imp ?: 0.01))), 2, '.', ''),
                     'codice_prefix'   => substr(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($prefix ?: 'GIFT'))), 0, 10) ?: 'GIFT',
                     'target_ids'      => $targets,
                     'quantita'        => max(1, (int)($qta ?: 1)),

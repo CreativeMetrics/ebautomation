@@ -92,7 +92,7 @@
                 </div>
                 <div class="input-group" id="grp-imp" style="display:none;">
                     <label>Importo Fisso (<?= h($conf['currency'] ?: 'EUR') ?>)</label>
-                    <input type="number" name="importo_fisso" step="0.01" min="0" value="<?= h((string)($edit_rule['importo_fisso'] ?? 0)) ?>">
+                    <input type="number" name="importo_fisso" step="0.01" min="0.01" max="99999.99" value="<?= h((string)($edit_rule['importo_fisso'] ?? 0.01)) ?>">
                 </div>
                 <div class="input-group">
                     <label>Prefisso Codice</label>
