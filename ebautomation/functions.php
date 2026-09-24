@@ -1027,23 +1027,51 @@ function api_call_with_retry(string $url, array $curl_opts, int $max_attempts = 
 }
 
 /**
- * Risolve dinamicamente l'organization_id proprietaria di un evento
- * Eventbrite, interrogando l'API invece di assumere un org_id fisso in
- * config. Permette a un singolo token di gestire regole sconto su più
- * organizzazioni. Risultato cachato in-request (un ordine può avere più
- * target sullo stesso evento).
+ * Recupera organization_id e nome di un evento Eventbrite in un'unica
+ * chiamata API, cachata in-request per event_id (un ordine può avere più
+ * target sullo stesso evento, e lo stesso evento target può comparire in
+ * più regole). Base per resolve_event_org_id() e get_event_name() qui sotto.
  */
-function resolve_event_org_id(string $event_id, string $api_token): ?string {
+function fetch_event_info(string $event_id, string $api_token): array {
     static $cache = [];
     if (array_key_exists($event_id, $cache)) return $cache[$event_id];
 
-    $res = api_call_with_retry("https://www.eventbriteapi.com/v3/events/{$event_id}/?fields=organization_id", [
+    $res = api_call_with_retry("https://www.eventbriteapi.com/v3/events/{$event_id}/?fields=organization_id,name", [
         CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $api_token],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 8,
     ], 2);
-    $org_id = $res['status'] === 200 ? (string)($res['body']['organization_id'] ?? '') : '';
-    return $cache[$event_id] = ($org_id !== '' ? $org_id : null);
+    if ($res['status'] !== 200) {
+        return $cache[$event_id] = ['organization_id' => null, 'name' => null];
+    }
+    $org_id = (string)($res['body']['organization_id'] ?? '');
+    $name   = (string)($res['body']['name']['text'] ?? '');
+    return $cache[$event_id] = [
+        'organization_id' => $org_id !== '' ? $org_id : null,
+        'name'            => $name !== '' ? $name : null,
+    ];
+}
+
+/**
+ * Risolve dinamicamente l'organization_id proprietaria di un evento
+ * Eventbrite, interrogando l'API invece di assumere un org_id fisso in
+ * config. Permette a un singolo token di gestire regole sconto su più
+ * organizzazioni.
+ */
+function resolve_event_org_id(string $event_id, string $api_token): ?string {
+    return fetch_event_info($event_id, $api_token)['organization_id'];
+}
+
+/**
+ * Nome pubblico di un evento target su Eventbrite, per mostrare nell'email
+ * "Evento: <nome reale>" invece della descrizione della regola — utile
+ * soprattutto quando una regola ha più target_ids (o più regole condividono
+ * lo stesso trigger, vedi process_eventbrite_order): senza questo, ogni
+ * riga dell'email mostrerebbe la stessa descrizione generica della regola
+ * invece del nome specifico di CIASCUN evento target.
+ */
+function get_event_name(string $event_id, string $api_token): ?string {
+    return fetch_event_info($event_id, $api_token)['name'];
 }
 
 // ── ORDINI PROCESSATI (idempotenza + retry) ─────────────────────────────────────
@@ -1527,7 +1555,13 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
             if ($chosen_lingua === null) $chosen_lingua = ($r['lingua'] ?? '') ?: null;
             $is_imp = ($r['tipo_sconto'] ?? 'percentuale') === 'importo';
             $regali_finali[$t_id] = [
-                'desc'  => $r['descrizione'] ?? '',
+                // Nome reale dell'evento target, non la descrizione della
+                // regola: una regola può avere più target_ids (o più
+                // regole condividere lo stesso trigger), quindi la
+                // descrizione da sola non distinguerebbe i singoli eventi
+                // nell'email. Fallback sulla descrizione solo se l'API non
+                // risponde (evento cancellato, errore transitorio, ecc.).
+                'desc'  => get_event_name($t_id, $conf['api_token']) ?? ($r['descrizione'] ?? ''),
                 'code'  => ($r['codice_prefix'] ?? 'GIFT') . '-' . strtoupper(substr(md5($order_id . $t_id), 0, 8)),
                 'url'   => 'https://www.eventbrite.it/e/' . $t_id,
                 'label' => $is_imp ? ($r['importo_fisso'] ?? '?') . ' ' . ($conf['currency'] ?: 'EUR') : format_percentuale((string)($r['percentuale'] ?? '100.00')) . '%',
