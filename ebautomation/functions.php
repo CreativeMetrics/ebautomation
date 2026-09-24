@@ -1036,12 +1036,18 @@ function fetch_event_info(string $event_id, string $api_token): array {
     static $cache = [];
     if (array_key_exists($event_id, $cache)) return $cache[$event_id];
 
-    $res = api_call_with_retry("https://www.eventbriteapi.com/v3/events/{$event_id}/?fields=organization_id,name", [
+    // Niente parametro "fields": in prova ristretto a "organization_id,name"
+    // restituiva sempre organization_id ma MAI il nome (l'API non sembra
+    // supportare bene quella combinazione) — l'oggetto evento completo,
+    // come già usato altrove nell'app (es. validazione regole in
+    // dashboard_actions.php), include sempre entrambi in modo affidabile.
+    $res = api_call_with_retry("https://www.eventbriteapi.com/v3/events/{$event_id}/", [
         CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $api_token],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 8,
     ], 2);
     if ($res['status'] !== 200) {
+        write_log("Impossibile recuperare i dati dell'evento $event_id (org/nome). HTTP: {$res['status']}");
         return $cache[$event_id] = ['organization_id' => null, 'name' => null];
     }
     $org_id = (string)($res['body']['organization_id'] ?? '');
