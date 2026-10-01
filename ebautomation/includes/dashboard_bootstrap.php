@@ -113,7 +113,10 @@ if (($_GET['action'] ?? '') === 'export_regole_csv') {
             $r['percentuale'] ?? '',
             $r['importo_fisso'] ?? 0,
             $r['codice_prefix'] ?? 'GIFT',
-            implode('|', $r['target_ids'] ?? []),
+            implode('|', array_map(
+                fn($t) => $t . (!empty($r['ticket_class_ids'][$t]) ? ':' . $r['ticket_class_ids'][$t] : ''),
+                $r['target_ids'] ?? []
+            )),
             $r['quantita'] ?? 1,
             $r['giorni_scadenza'] ?? 0,
             $r['qty_minima'] ?? 1,

@@ -1513,6 +1513,15 @@ function process_eventbrite_order(array $conf, string $api_url, string $action):
                 $discount['end_date'] = date('Y-m-d\TH:i:s\Z', time() + $giorni * 86400);
             }
 
+            // Vincola lo sconto a un singolo tipo di biglietto del target,
+            // se specificato nella regola (sintassi "ID_evento:ID_tipo"),
+            // invece che a tutto l'evento — permette ad es. di lasciare
+            // scontato solo 1 biglietto e il resto a prezzo pieno nello
+            // stesso ordine, con due tipi di biglietto sul target.
+            if (!empty($r['ticket_class_ids'][$t_id])) {
+                $discount['ticket_class_ids'] = [(string)$r['ticket_class_ids'][$t_id]];
+            }
+
             // Multi-organizzazione: l'endpoint discounts è scoped per org, quindi
             // risolviamo dinamicamente l'org proprietaria dell'evento target
             // invece di assumere un org_id fisso in configurazione. Questo

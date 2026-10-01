@@ -313,7 +313,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // = si sta modificando quella specifica regola.
             $rule_id = trim($_POST['rule_id'] ?? '');
             if ($tid) {
-                $targets = array_values(array_unique(array_filter(array_map('trim', explode(',', $_POST['target_id'] ?? '')))));
+                // Ogni voce è "ID_evento" o, opzionalmente, "ID_evento:ID_tipo_biglietto"
+                // per vincolare lo sconto a un tipo di biglietto specifico di
+                // quel target invece che a tutto l'evento (utile per lasciare
+                // scontato solo 1 biglietto e il resto a prezzo pieno nello
+                // stesso ordine, con due tipi di biglietto sull'evento target).
+                // Usata solo per i target che la specificano esplicitamente.
+                $targets          = [];
+                $ticket_class_ids = [];
+                foreach (array_filter(array_map('trim', explode(',', $_POST['target_id'] ?? ''))) as $entry) {
+                    if (str_contains($entry, ':')) {
+                        [$eid, $tcid] = array_map('trim', explode(':', $entry, 2));
+                        if ($eid === '') continue;
+                        $targets[] = $eid;
+                        if ($tcid !== '') $ticket_class_ids[$eid] = $tcid;
+                    } else {
+                        $targets[] = $entry;
+                    }
+                }
+                $targets = array_values(array_unique($targets));
                 $tipo    = ($_POST['tipo_sconto'] ?? '') === 'importo' ? 'importo' : 'percentuale';
 
                 // Validazione event ID via API Eventbrite
@@ -354,6 +372,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'importo_fisso'   => number_format(max(0.01, min(99999.99, (float)($_POST['importo_fisso'] ?? 0.01))), 2, '.', ''),
                     'codice_prefix'   => substr(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($_POST['codice_prefix'] ?? 'GIFT'))), 0, 10) ?: 'GIFT',
                     'target_ids'      => $targets,
+                    // target_id => ticket_class_id, solo per i target che lo specificano
+                    // (sintassi "ID_evento:ID_tipo_biglietto"). Vedi process_eventbrite_order.
+                    'ticket_class_ids' => $ticket_class_ids,
                     'quantita'        => max(1, (int)($_POST['quantita']        ?? 1)),
                     'giorni_scadenza' => max(0, (int)($_POST['giorni_scadenza'] ?? 0)),
                     'qty_minima'      => max(1, (int)($_POST['qty_minima']      ?? 1)),
@@ -463,7 +484,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $rid = trim($tid); // formato legacy: una sola regola per trigger, id=trigger_id
                 }
                 $tid = trim($tid);
-                $targets = array_values(array_filter(array_map('trim', explode('|', $targets_raw))));
+                // Ogni voce (separate da |) è "ID_evento" o, opzionalmente,
+                // "ID_evento:ID_tipo_biglietto" — stessa sintassi del form
+                // (vedi save_regola).
+                $targets          = [];
+                $ticket_class_ids = [];
+                foreach (array_filter(array_map('trim', explode('|', $targets_raw))) as $entry) {
+                    if (str_contains($entry, ':')) {
+                        [$eid, $tcid] = array_map('trim', explode(':', $entry, 2));
+                        if ($eid === '') continue;
+                        $targets[] = $eid;
+                        if ($tcid !== '') $ticket_class_ids[$eid] = $tcid;
+                    } else {
+                        $targets[] = $entry;
+                    }
+                }
+                $targets = array_values(array_unique($targets));
                 if ($rid === '' || $tid === '' || empty($targets)) {
                     $csv_error = "Riga non valida (id, trigger_id o target_ids mancanti): " . implode(',', $row);
                     break;
@@ -476,6 +512,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'importo_fisso'   => number_format(max(0.01, min(99999.99, (float)($imp ?: 0.01))), 2, '.', ''),
                     'codice_prefix'   => substr(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($prefix ?: 'GIFT'))), 0, 10) ?: 'GIFT',
                     'target_ids'      => $targets,
+                    'ticket_class_ids' => $ticket_class_ids,
                     'quantita'        => max(1, (int)($qta ?: 1)),
                     'giorni_scadenza' => max(0, (int)($giorni ?: 0)),
                     'qty_minima'      => max(1, (int)($qtymin ?: 1)),

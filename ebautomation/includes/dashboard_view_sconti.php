@@ -23,7 +23,10 @@
                 <td><?= h((string)($r['quantita'] ?? 1)) ?></td>
                 <td><?= ($r['qty_minima'] ?? 1) > 1 ? h((string)$r['qty_minima']) . ' biglietti' : '—' ?></td>
                 <td><?= ($r['giorni_scadenza'] ?? 0) > 0 ? h((string)$r['giorni_scadenza']) . ' gg' : '—' ?></td>
-                <td><?php foreach ($r['target_ids'] as $t) echo '<span class="badge">'.h($t).'</span> '; ?></td>
+                <td><?php foreach ($r['target_ids'] as $t) {
+                    $tcid = $r['ticket_class_ids'][$t] ?? null;
+                    echo '<span class="badge">'.h($t).($tcid ? ' <small style="opacity:.7;">(tipo '.h($tcid).')</small>' : '').'</span> ';
+                } ?></td>
                 <td>
                     <?php if ($is_admin): ?>
                     <form method="POST" style="display:inline;">
@@ -74,7 +77,11 @@
                 </div>
                 <div class="input-group">
                     <label>ID Target (separati da ,)</label>
-                    <input type="text" name="target_id" id="f_r" value="<?= h(implode(', ', $edit_rule['target_ids'] ?? [])) ?>" required>
+                    <input type="text" name="target_id" id="f_r" value="<?= h(implode(', ', array_map(
+                        fn($t) => $t . (!empty($edit_rule['ticket_class_ids'][$t]) ? ':' . $edit_rule['ticket_class_ids'][$t] : ''),
+                        $edit_rule['target_ids'] ?? []
+                    ))) ?>" required>
+                    <span class="tip">Opzionale: aggiungi <code>:ID_tipo_biglietto</code> dopo un ID evento (es. <code>123456:789012</code>) per vincolare lo sconto a un solo tipo di biglietto di quel target invece che a tutto l'evento — utile per lasciare scontato solo 1 biglietto e il resto a prezzo pieno nello stesso ordine, creando due tipi di biglietto sull'evento target.</span>
                 </div>
                 <div class="input-group">
                     <label>Nome Promozione</label>

@@ -340,7 +340,10 @@ $gen_at  = date('d/m/Y \a\l\l\e H:i:s');
                     <td><span class="code"><?= h($r['codice_prefix'] ?? 'GIFT') ?></span></td>
                     <td style="text-align:center;"><?= h((string)($r['quantita'] ?? 1)) ?></td>
                     <td><?= $scade ?></td>
-                    <td><?php foreach ($r['target_ids'] as $t) echo '<span class="code" style="margin-right:4px;">'.h($t).'</span>'; ?></td>
+                    <td><?php foreach ($r['target_ids'] as $t) {
+                        $tcid = $r['ticket_class_ids'][$t] ?? null;
+                        echo '<span class="code" style="margin-right:4px;">'.h($t).($tcid ? ' (tipo '.h($tcid).')' : '').'</span>';
+                    } ?></td>
                 </tr>
                 <?php endforeach; ?>
                 </tbody>
